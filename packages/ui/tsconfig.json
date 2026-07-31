@@ -2,8 +2,7 @@
   "extends": "@docsgraph/config/tsconfig.base.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "noEmit": true,
-    "types": ["@testing-library/jest-dom"]
+    "noEmit": true
   },
   "include": ["src"]
 }
