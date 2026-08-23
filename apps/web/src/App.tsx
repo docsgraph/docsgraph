@@ -53,6 +53,127 @@ export function App() {
     'doc-3': 'failed',
   });
 
+  // State for document title editing and offline edit tracking
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editingTitleText, setEditingTitleText] = useState('');
+  const [offlineEditMade, setOfflineEditMade] = useState(false);
+
+  // Network and Sync States
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'conflict' | 'offline'>('synced');
+  const [activeConflicts, setActiveConflicts] = useState<Array<{
+    id: string;
+    entityId: string;
+    entityType: 'document' | 'clause' | 'party';
+    fieldName: string;
+    localValue: string;
+    remoteValue: string;
+  }>>([]);
+  const [showConflictModal, setShowConflictModal] = useState(false);
+
+  // Real offline state sync with navigator
+  useEffect(() => {
+    const handleOnlineStatus = () => {
+      setIsOnline(navigator.onLine);
+      if (navigator.onLine) {
+        setSyncStatus('syncing');
+        setTimeout(() => setSyncStatus('synced'), 1500);
+      } else {
+        setSyncStatus('offline');
+      }
+    };
+    window.addEventListener('online', handleOnlineStatus);
+    window.addEventListener('offline', handleOnlineStatus);
+    if (!navigator.onLine) {
+      setSyncStatus('offline');
+    }
+    return () => {
+      window.removeEventListener('online', handleOnlineStatus);
+      window.removeEventListener('offline', handleOnlineStatus);
+    };
+  }, []);
+
+  // Network toggler simulation
+  const handleToggleNetwork = () => {
+    if (isOnline) {
+      setIsOnline(false);
+      setSyncStatus('offline');
+    } else {
+      setIsOnline(true);
+      setSyncStatus('syncing');
+      setTimeout(() => {
+        if (offlineEditMade && selectedDocId) {
+          const doc = documents.find((d) => d.id === selectedDocId);
+          if (doc) {
+            setSyncStatus('conflict');
+            setActiveConflicts([
+              {
+                id: 'conflict-1',
+                entityId: selectedDocId,
+                entityType: 'document',
+                fieldName: 'title',
+                localValue: doc.title,
+                remoteValue: doc.title + ' (Server Version Conflict)',
+              },
+            ]);
+            setShowConflictModal(true);
+          } else {
+            setSyncStatus('synced');
+          }
+        } else {
+          setSyncStatus('synced');
+        }
+      }, 1500);
+    }
+  };
+
+  // Trigger Mock Sync Conflict button
+  const handleTriggerMockConflict = () => {
+    if (!selectedDocId) return;
+    const doc = documents.find((d) => d.id === selectedDocId);
+    if (doc) {
+      setSyncStatus('conflict');
+      setActiveConflicts([
+        {
+          id: 'conflict-1',
+          entityId: selectedDocId,
+          entityType: 'document',
+          fieldName: 'title',
+          localValue: doc.title,
+          remoteValue: doc.title + ' (Remote Divergent Edit)',
+        },
+      ]);
+      setShowConflictModal(true);
+    }
+  };
+
+  // Resolve sync conflict per documented policy (No data loss)
+  const handleResolveConflict = async (resolution: 'local' | 'remote') => {
+    if (activeConflicts.length === 0) return;
+    const conflict = activeConflicts[0];
+
+    if (resolution === 'remote') {
+      await store.updateDocument(conflict.entityId, { title: conflict.remoteValue });
+      await loadData();
+    }
+
+    setActiveConflicts([]);
+    setShowConflictModal(false);
+    setSyncStatus('synced');
+    setOfflineEditMade(false);
+  };
+
+  // Save document title updates and track offline changes
+  const handleSaveTitle = async () => {
+    if (!selectedDocId) return;
+    await store.updateDocument(selectedDocId, { title: editingTitleText });
+    await loadData();
+    setIsEditingTitle(false);
+    if (!isOnline) {
+      setOfflineEditMade(true);
+    }
+  };
+
   // Automatically clear graph highlight when opening or switching documents
   useEffect(() => {
     if (selectedDocId) {
@@ -336,15 +457,62 @@ export function App() {
             Local-first semantic document workspace & offline search
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <Button variant="primary">New document</Button>
           <Button variant="secondary" onClick={() => setShowGraph(!showGraph)}>
             {showGraph ? 'Show Document Workspace' : 'Toggle Knowledge Graph'}
           </Button>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-            Offline Mode
-          </span>
+
+          {/* Simulated Network Toggle */}
+          <button
+            onClick={handleToggleNetwork}
+            className={`px-3 py-1 text-xs font-semibold rounded-full border transition flex items-center gap-1.5 ${
+              isOnline
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+            }`}
+            title="Click to toggle simulated connection state"
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-slate-500'}`}></span>
+            {isOnline ? 'Simulate Offline' : 'Simulate Online'}
+          </button>
+
+          {/* Sync Status Indicators */}
+          {syncStatus === 'synced' && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              Online & Synced
+            </span>
+          )}
+          {syncStatus === 'syncing' && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse">
+              <span className="h-2 w-2 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
+              Syncing Changes...
+            </span>
+          )}
+          {syncStatus === 'offline' && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-slate-805/10 bg-slate-800 text-slate-400 border border-slate-700">
+              Offline Mode
+            </span>
+          )}
+          {syncStatus === 'conflict' && (
+            <button
+              onClick={() => setShowConflictModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-red-500/15 text-red-400 border border-red-500/35 hover:bg-red-500/25"
+            >
+              ⚡ Sync Conflict!
+            </button>
+          )}
+
+          {/* Trigger Mock Conflict button */}
+          {isOnline && syncStatus === 'synced' && (
+            <button
+              onClick={handleTriggerMockConflict}
+              className="px-2.5 py-1 text-xs border border-slate-800 bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-350 rounded"
+              title="Manually force a sync conflict for testing"
+            >
+              Force Conflict
+            </button>
+          )}
         </div>
       </header>
 
@@ -442,11 +610,41 @@ export function App() {
               <article className="max-w-5xl mx-auto bg-slate-950/50 border border-slate-800 rounded-xl p-6 shadow-xl flex flex-col gap-4 max-h-[75vh] min-h-[500px]">
                 {/* Reader Header */}
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-100">{activeDoc.title}</h2>
+                  <div className="flex flex-col gap-1">
+                    {isEditingTitle ? (
+                      <div className="flex gap-2 items-center">
+                        <input
+                          value={editingTitleText}
+                          onChange={(e) => setEditingTitleText(e.target.value)}
+                          className="bg-slate-900 border border-slate-700 px-2 py-1 rounded text-sm text-slate-100 focus:outline-none"
+                        />
+                        <button
+                          onClick={handleSaveTitle}
+                          className="bg-blue-600 hover:bg-blue-500 text-xs font-semibold px-2 py-1 rounded text-white"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setIsEditingTitle(false)}
+                          className="bg-slate-805 bg-slate-800 hover:bg-slate-750 text-xs font-semibold px-2 py-1 rounded text-slate-300"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-xl font-bold text-slate-100">{activeDoc.title}</h2>
+                        <button
+                          onClick={() => { setIsEditingTitle(true); setEditingTitleText(activeDoc.title); }}
+                          className="text-xs text-blue-400 hover:text-blue-300 underline"
+                        >
+                          Rename
+                        </button>
+                      </div>
+                    )}
                     <span className="text-xs text-slate-500 font-mono">ID: {activeDoc.id}</span>
                   </div>
-                  <Button variant="secondary" onClick={() => { setSelectedDocId(null); setSelectedSnippet(null); }}>
+                  <Button variant="secondary" onClick={() => { setSelectedDocId(null); setSelectedSnippet(null); setIsEditingTitle(false); }}>
                     Close Reader
                   </Button>
                 </div>
@@ -672,6 +870,90 @@ export function App() {
           )}
         </section>
       </div>
+
+      {/* Conflict Resolution Modal */}
+      {showConflictModal && syncStatus === 'conflict' && activeConflicts.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+              <span className="text-xl">⚡</span>
+              <div>
+                <h3 className="text-md font-bold text-slate-100">Sync Conflict Detected</h3>
+                <span className="text-xs text-slate-500 font-mono">
+                  Entity: {activeConflicts[0].entityType} ({activeConflicts[0].entityId})
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-405 text-slate-400">
+              The field <code className="text-amber-400 font-mono">{activeConflicts[0].fieldName}</code> was modified locally while offline, but diverging updates were also found on the server.
+            </p>
+
+            {/* Side-by-Side Comparison */}
+            <div className="grid grid-cols-2 gap-4 mt-2">
+              {/* Local version card */}
+              <div className="bg-slate-950/50 border border-slate-800 rounded-lg p-3 flex flex-col gap-2">
+                <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">
+                  Local (Your Offline Edit)
+                </span>
+                <div className="bg-slate-900 p-2.5 rounded text-xs text-slate-200 min-h-[60px] font-mono break-all">
+                  {activeConflicts[0].localValue}
+                </div>
+                <span className="text-[9px] text-slate-500">
+                  Preserved offline. No data loss.
+                </span>
+              </div>
+
+              {/* Remote version card */}
+              <div className="bg-slate-950/50 border border-slate-800 rounded-lg p-3 flex flex-col gap-2">
+                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
+                  Remote (Server Changes)
+                </span>
+                <div className="bg-slate-950/50 p-2.5 rounded text-xs text-slate-200 min-h-[60px] font-mono break-all">
+                  {activeConflicts[0].remoteValue}
+                </div>
+                <span className="text-[9px] text-slate-500">
+                  Last Write Wins server sequence.
+                </span>
+              </div>
+            </div>
+
+            {/* Resolution Options */}
+            <div className="flex flex-col gap-2 mt-2">
+              <button
+                onClick={() => handleResolveConflict('local')}
+                className="w-full text-left p-3 bg-blue-950/20 hover:bg-blue-950/40 border border-blue-900/40 hover:border-blue-800 rounded-lg flex items-center justify-between text-xs transition"
+              >
+                <div>
+                  <span className="font-semibold text-blue-300 block">Keep Local (Offline Edit)</span>
+                  <span className="text-[10px] text-slate-400">Keep your offline modifications and push to server.</span>
+                </div>
+                <span className="text-blue-400 font-bold">→</span>
+              </button>
+
+              <button
+                onClick={() => handleResolveConflict('remote')}
+                className="w-full text-left p-3 bg-emerald-950/20 hover:bg-emerald-950/40 border border-emerald-900/40 hover:border-emerald-800 rounded-lg flex items-center justify-between text-xs transition"
+              >
+                <div>
+                  <span className="font-semibold text-emerald-300 block">Keep Remote (Accept Server)</span>
+                  <span className="text-[10px] text-slate-400">Discard your offline modifications and accept server.</span>
+                </div>
+                <span className="text-emerald-400 font-bold">→</span>
+              </button>
+            </div>
+
+            <div className="flex justify-between items-center border-t border-slate-800 pt-3 mt-1">
+              <span className="text-[10px] text-slate-500">
+                Documented policy: Field-level LWW
+              </span>
+              <Button variant="secondary" onClick={() => setShowConflictModal(false)}>
+                Resolve Later
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
