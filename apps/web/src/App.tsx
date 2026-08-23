@@ -3,6 +3,7 @@ import { GraphView } from '@docsgraph/graph-view';
 import type { GraphEdge, GraphNode } from '@docsgraph/graph-view';
 import { Button } from '@docsgraph/ui';
 import { LocalStore, InMemorySqliteAdapter } from '@docsgraph/data';
+import type { Party, Clause, Relationship } from '@docsgraph/data';
 import { search } from '@docsgraph/search';
 import type { EvidenceSnippet } from '@docsgraph/search';
 
@@ -32,6 +33,9 @@ const store = new LocalStore(adapter);
 export function App() {
   const [dbInitialized, setDbInitialized] = useState(false);
   const [documents, setDocuments] = useState<Array<{ id: string; title: string; content: string }>>([]);
+  const [parties, setParties] = useState<Party[]>([]);
+  const [clauses, setClauses] = useState<Clause[]>([]);
+  const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<EvidenceSnippet[]>([]);
   const [loading, setLoading] = useState(false);
@@ -39,12 +43,25 @@ export function App() {
   const [selectedSnippet, setSelectedSnippet] = useState<EvidenceSnippet | null>(null);
   const [showGraph, setShowGraph] = useState(false);
 
+  // Helper to load all entities from local store
+  async function loadData() {
+    const docs = await store.getDocuments();
+    const prts = await store.getParties();
+    const cls = await store.getClauses();
+    const rels = await store.getRelationships();
+    setDocuments(docs);
+    setParties(prts);
+    setClauses(cls);
+    setRelationships(rels);
+  }
+
   // Initialize DB and seed
   useEffect(() => {
     async function init() {
       await store.initialize();
       const existing = await store.getDocuments();
       if (existing.length === 0) {
+        // Seed documents
         for (const doc of SEED_DOCS) {
           await store.createDocument({
             id: doc.id,
@@ -52,9 +69,90 @@ export function App() {
             content: doc.content,
           });
         }
+
+        // Seed parties
+        await store.createParty({ id: 'party-1', name: 'Acme Corp', email: 'contact@acme.com' });
+        await store.createParty({ id: 'party-2', name: 'Beta LLC', email: 'contact@beta.com' });
+
+        // Seed clauses
+        await store.createClause({
+          id: 'clause-1',
+          documentId: 'doc-1',
+          title: 'Payment Terms',
+          text: 'all invoices must be paid within 30 days of receipt.',
+        });
+        await store.createClause({
+          id: 'clause-2',
+          documentId: 'doc-2',
+          title: 'Term',
+          text: 'the confidentiality obligations shall survive for a period of 5 years.',
+        });
+        await store.createClause({
+          id: 'clause-3',
+          documentId: 'doc-3',
+          title: 'Deliverables',
+          text: 'Provider shall deliver the final design specifications by September 15, 2026.',
+        });
+
+        // Seed relationships
+        await store.createRelationship({
+          id: 'rel-1',
+          sourceId: 'doc-1',
+          sourceType: 'document',
+          targetId: 'party-1',
+          targetType: 'party',
+          type: 'signed_by',
+        });
+        await store.createRelationship({
+          id: 'rel-2',
+          sourceId: 'doc-1',
+          sourceType: 'document',
+          targetId: 'party-2',
+          targetType: 'party',
+          type: 'signed_by',
+        });
+        await store.createRelationship({
+          id: 'rel-3',
+          sourceId: 'doc-1',
+          sourceType: 'document',
+          targetId: 'clause-1',
+          targetType: 'clause',
+          type: 'contains',
+        });
+        await store.createRelationship({
+          id: 'rel-4',
+          sourceId: 'doc-2',
+          sourceType: 'document',
+          targetId: 'clause-2',
+          targetType: 'clause',
+          type: 'contains',
+        });
+        await store.createRelationship({
+          id: 'rel-5',
+          sourceId: 'doc-3',
+          sourceType: 'document',
+          targetId: 'clause-3',
+          targetType: 'clause',
+          type: 'contains',
+        });
+        await store.createRelationship({
+          id: 'rel-6',
+          sourceId: 'doc-2',
+          sourceType: 'document',
+          targetId: 'party-1',
+          targetType: 'party',
+          type: 'signed_by',
+        });
+        await store.createRelationship({
+          id: 'rel-7',
+          sourceId: 'doc-2',
+          sourceType: 'document',
+          targetId: 'party-2',
+          targetType: 'party',
+          type: 'signed_by',
+        });
       }
-      const docs = await store.getDocuments();
-      setDocuments(docs);
+      await loadData();
       setDbInitialized(true);
     }
     init().catch(console.error);
@@ -87,16 +185,62 @@ export function App() {
 
   const activeDoc = documents.find((d) => d.id === selectedDocId);
 
-  // Graph nodes based on database
-  const graphNodes: GraphNode[] = documents.map((doc) => ({
-    id: doc.id,
-    label: doc.title,
+  // Dynamic mapping of DB entities to knowledge graph nodes and edges
+  const graphNodes: GraphNode[] = [
+    ...documents.map((doc) => ({
+      id: doc.id,
+      label: doc.title,
+      type: 'document' as const,
+    })),
+    ...parties.map((p) => ({
+      id: p.id,
+      label: p.name,
+      type: 'party' as const,
+    })),
+    ...clauses.map((c) => ({
+      id: c.id,
+      label: c.title || c.id,
+      type: 'clause' as const,
+    })),
+  ];
+
+  const graphEdges: GraphEdge[] = relationships.map((r) => ({
+    source: r.sourceId,
+    target: r.targetId,
+    type: r.type,
   }));
 
-  const graphEdges: GraphEdge[] = [
-    { source: 'doc-1', target: 'doc-2' },
-    { source: 'doc-1', target: 'doc-3' },
-  ];
+  // Handle clicking on a graph node to navigate to the source document/passage
+  const handleNodeClick = (nodeId: string, nodeType: 'document' | 'party' | 'clause') => {
+    if (nodeType === 'document') {
+      setSelectedDocId(nodeId);
+      setSelectedSnippet(null);
+      setShowGraph(false);
+    } else if (nodeType === 'clause') {
+      const matched = clauses.find((c) => c.id === nodeId);
+      if (matched) {
+        setSelectedDocId(matched.documentId);
+        const doc = documents.find((d) => d.id === matched.documentId);
+        if (doc) {
+          const start = doc.content.indexOf(matched.text);
+          const end = start !== -1 ? start + matched.text.length : 0;
+          setSelectedSnippet({
+            text: matched.text,
+            sourceDocumentId: matched.documentId,
+            offset: { start: Math.max(0, start), end: Math.max(0, end) },
+          });
+        }
+        setShowGraph(false);
+      }
+    } else if (nodeType === 'party') {
+      const rel = relationships.find((r) => r.targetId === nodeId && r.sourceType === 'document');
+      if (rel) {
+        setSelectedDocId(rel.sourceId);
+        setSelectedSnippet(null);
+        setShowGraph(false);
+      }
+    }
+  };
 
   // Helper to render text with highlighted passage
   const renderHighlightedContent = (content: string, snippet: EvidenceSnippet | null) => {
@@ -221,7 +365,13 @@ export function App() {
           <div className={showGraph ? 'h-full flex flex-col gap-4' : 'hidden'}>
             <h2 className="text-lg font-bold text-slate-200">Knowledge Graph Exploration</h2>
             <div className="flex-1 rounded-lg border border-slate-800 bg-slate-950 p-4 flex items-center justify-center">
-              <GraphView nodes={graphNodes} edges={graphEdges} width={640} height={400} />
+              <GraphView
+                nodes={graphNodes}
+                edges={graphEdges}
+                width={640}
+                height={400}
+                onNodeClick={handleNodeClick}
+              />
             </div>
           </div>
 

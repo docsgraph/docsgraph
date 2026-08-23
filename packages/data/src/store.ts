@@ -274,6 +274,13 @@ export class LocalStore {
     return rows.map((r) => this.mapDbToClause(r));
   }
 
+  async getClauses(): Promise<Clause[]> {
+    const rows = await this.adapter.query(
+      'SELECT id, document_id, title, text, created_at, updated_at, last_seq FROM clauses'
+    );
+    return rows.map((r) => this.mapDbToClause(r));
+  }
+
   async updateClause(
     id: string,
     updates: Partial<Omit<Clause, 'id' | 'documentId' | 'createdAt' | 'updatedAt' | 'lastSeq'>>
