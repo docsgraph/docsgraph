@@ -43,6 +43,66 @@ export function App() {
   const [selectedSnippet, setSelectedSnippet] = useState<EvidenceSnippet | null>(null);
   const [showGraph, setShowGraph] = useState(false);
 
+  // State to track if any node in the graph needs focusing
+  const [highlightNodeId, setHighlightNodeId] = useState<string | null>(null);
+
+  // Status mapping for contract analysis
+  const [docStatuses, setDocStatuses] = useState<Record<string, 'completed' | 'pending' | 'failed'>>({
+    'doc-1': 'completed',
+    'doc-2': 'pending',
+    'doc-3': 'failed',
+  });
+
+  // Automatically clear graph highlight when opening or switching documents
+  useEffect(() => {
+    if (selectedDocId) {
+      setHighlightNodeId(null);
+    }
+  }, [selectedDocId]);
+
+  // Query parties associated with a document
+  const getDocParties = (docId: string) => {
+    const partyIds = relationships
+      .filter((r) => r.sourceId === docId && r.targetType === 'party')
+      .map((r) => r.targetId);
+    return parties.filter((p) => partyIds.includes(p.id));
+  };
+
+  // Query clauses associated with a document
+  const getDocClauses = (docId: string) => {
+    return clauses.filter((c) => c.documentId === docId);
+  };
+
+  // Highlight specific clause passage in the reader
+  const handleHighlightClause = (clause: Clause) => {
+    const doc = documents.find((d) => d.id === clause.documentId);
+    if (doc) {
+      const start = doc.content.indexOf(clause.text);
+      const end = start !== -1 ? start + clause.text.length : 0;
+      setSelectedSnippet({
+        text: clause.text,
+        sourceDocumentId: clause.documentId,
+        offset: { start: Math.max(0, start), end: Math.max(0, end) },
+      });
+    }
+  };
+
+  // Focus specific entity in the graph
+  const handleFocusInGraph = (entityId: string) => {
+    setHighlightNodeId(entityId);
+    setShowGraph(true);
+    setSelectedDocId(null);
+    setSelectedSnippet(null);
+  };
+
+  // Trigger analysis retry simulation
+  const handleRetryAnalysis = (docId: string) => {
+    setDocStatuses((prev) => ({ ...prev, [docId]: 'pending' }));
+    setTimeout(() => {
+      setDocStatuses((prev) => ({ ...prev, [docId]: 'completed' }));
+    }, 2000);
+  };
+
   // Helper to load all entities from local store
   async function loadData() {
     const docs = await store.getDocuments();
@@ -212,6 +272,7 @@ export function App() {
 
   // Handle clicking on a graph node to navigate to the source document/passage
   const handleNodeClick = (nodeId: string, nodeType: 'document' | 'party' | 'clause') => {
+    setHighlightNodeId(null);
     if (nodeType === 'document') {
       setSelectedDocId(nodeId);
       setSelectedSnippet(null);
@@ -371,14 +432,16 @@ export function App() {
                 width={640}
                 height={400}
                 onNodeClick={handleNodeClick}
+                highlightNodeId={highlightNodeId || undefined}
               />
             </div>
           </div>
 
           {!showGraph && (
             activeDoc ? (
-              <article className="max-w-3xl mx-auto bg-slate-950/50 border border-slate-800 rounded-xl p-6 shadow-xl flex flex-col gap-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <article className="max-w-5xl mx-auto bg-slate-950/50 border border-slate-800 rounded-xl p-6 shadow-xl flex flex-col gap-4 max-h-[75vh] min-h-[500px]">
+                {/* Reader Header */}
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
                   <div>
                     <h2 className="text-xl font-bold text-slate-100">{activeDoc.title}</h2>
                     <span className="text-xs text-slate-500 font-mono">ID: {activeDoc.id}</span>
@@ -388,15 +451,194 @@ export function App() {
                   </Button>
                 </div>
 
-                {selectedSnippet && selectedSnippet.sourceDocumentId === activeDoc.id && (
-                  <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs p-3 rounded-lg flex flex-col gap-1">
-                    <span className="font-bold">Active Passage Reference:</span>
-                    <p className="italic">"... {selectedSnippet.text} ..."</p>
+                {/* Main Split-Pane Content Area */}
+                <div className="flex-1 flex gap-6 overflow-hidden min-h-0">
+                  {/* Left: Scrollable Contract text body */}
+                  <div className="flex-1 overflow-y-auto pr-6 border-r border-slate-800/60">
+                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-3">
+                      Document Body
+                    </h3>
+                    {selectedSnippet && selectedSnippet.sourceDocumentId === activeDoc.id && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs p-3 rounded-lg flex flex-col gap-1 mb-4">
+                        <span className="font-bold">Active Passage Reference:</span>
+                        <p className="italic">"... {selectedSnippet.text} ..."</p>
+                      </div>
+                    )}
+                    <div className="bg-slate-900/60 p-4 rounded-lg border border-slate-850">
+                      {renderHighlightedContent(activeDoc.content, selectedSnippet)}
+                    </div>
                   </div>
-                )}
 
-                <div className="bg-slate-900/60 p-4 rounded-lg border border-slate-850">
-                  {renderHighlightedContent(activeDoc.content, selectedSnippet)}
+                  {/* Right: Contract Intelligence Detail View */}
+                  <div className="w-80 flex flex-col gap-4 overflow-y-auto pl-2 flex-shrink-0">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Contract Intelligence
+                      </h3>
+                      {/* Dynamic Status Badges */}
+                      {docStatuses[activeDoc.id] === 'completed' && (
+                        <span className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          Completed
+                        </span>
+                      )}
+                      {docStatuses[activeDoc.id] === 'pending' && (
+                        <span className="bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
+                          Processing
+                        </span>
+                      )}
+                      {docStatuses[activeDoc.id] === 'failed' && (
+                        <span className="bg-red-500/10 border border-red-500/30 text-red-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          Failed
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Pending State UI */}
+                    {docStatuses[activeDoc.id] === 'pending' && (
+                      <div className="flex-1 flex flex-col items-center justify-center py-12 text-center gap-3">
+                        <div className="h-8 w-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-350">Analyzing contract structure...</span>
+                          <span className="text-[11px] text-slate-500 mt-1">Extracting signatory parties and clauses.</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Failed State UI */}
+                    {docStatuses[activeDoc.id] === 'failed' && (
+                      <div className="flex-1 flex flex-col items-center justify-center py-8 text-center gap-3 bg-red-950/10 border border-red-900/30 rounded-lg p-4">
+                        <span className="text-2xl">⚠️</span>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold text-red-400">Analysis Failed</span>
+                          <span className="text-[11px] text-slate-400 mt-1">
+                            An error occurred during clause extraction. Timeout limit exceeded.
+                          </span>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          className="mt-2 text-xs border-red-900/50 hover:bg-red-950/20"
+                          onClick={() => handleRetryAnalysis(activeDoc.id)}
+                        >
+                          Retry Analysis
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Completed State UI */}
+                    {docStatuses[activeDoc.id] === 'completed' && (
+                      <div className="flex flex-col gap-4">
+                        {/* Extracted Parties */}
+                        <div className="flex flex-col gap-2">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                            Extracted Parties
+                          </span>
+                          {getDocParties(activeDoc.id).length === 0 ? (
+                            <span className="text-xs text-slate-600 italic">No signatories detected.</span>
+                          ) : (
+                            <div className="flex flex-col gap-1.5">
+                              {getDocParties(activeDoc.id).map((party) => (
+                                <div
+                                  key={party.id}
+                                  className="bg-slate-900/60 border border-slate-800 rounded p-2 flex items-center justify-between hover:border-slate-700 transition"
+                                >
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="text-xs font-semibold text-slate-200 truncate">
+                                      {party.name}
+                                    </span>
+                                    <span className="text-[10px] text-slate-500 truncate">
+                                      {party.email || 'No email registered'}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleFocusInGraph(party.id)}
+                                    className="text-[10px] text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-0.5 hover:underline flex-shrink-0"
+                                    title="View in Graph"
+                                  >
+                                    🌐 Graph
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Extracted Clauses */}
+                        <div className="flex flex-col gap-2">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                            Extracted Clauses
+                          </span>
+                          {getDocClauses(activeDoc.id).length === 0 ? (
+                            <span className="text-xs text-slate-600 italic">No clauses detected.</span>
+                          ) : (
+                            <div className="flex flex-col gap-2">
+                              {getDocClauses(activeDoc.id).map((clause) => (
+                                <div
+                                  key={clause.id}
+                                  className="bg-slate-900/60 border border-slate-800 rounded p-2.5 flex flex-col gap-1.5 hover:border-slate-700 transition"
+                                >
+                                  <div className="flex items-center justify-between border-b border-slate-800/65 pb-1">
+                                    <span className="text-xs font-bold text-amber-400">
+                                      {clause.title}
+                                    </span>
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => handleHighlightClause(clause)}
+                                        className="text-[9px] text-blue-400 hover:text-blue-300 font-semibold hover:underline"
+                                      >
+                                        🔍 Show
+                                      </button>
+                                      <button
+                                        onClick={() => handleFocusInGraph(clause.id)}
+                                        className="text-[9px] text-purple-400 hover:text-purple-300 font-semibold hover:underline"
+                                      >
+                                        🌐 Graph
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <p className="text-[11px] text-slate-400 line-clamp-2 italic">
+                                    "{clause.text}"
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Key Terms / Summary */}
+                        <div className="flex flex-col gap-2 bg-slate-900/40 border border-slate-800/80 rounded-lg p-3">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                            Key Details & Deadlines
+                          </span>
+                          <div className="flex flex-col gap-2 text-xs">
+                            {activeDoc.id === 'doc-1' && (
+                              <>
+                                <div className="flex justify-between border-b border-slate-850 pb-1">
+                                  <span className="text-slate-400">Payment Window:</span>
+                                  <span className="font-semibold text-slate-200">30 Days</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-400">Late Interest Fee:</span>
+                                  <span className="font-semibold text-slate-200">1.5% Monthly</span>
+                                </div>
+                              </>
+                            )}
+                            {activeDoc.id === 'doc-2' && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">Survival Period:</span>
+                                <span className="font-semibold text-slate-200">5 Years</span>
+                              </div>
+                            )}
+                            {activeDoc.id === 'doc-3' && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">Target Delivery Date:</span>
+                                <span className="font-semibold text-slate-200">Sept 15, 2026</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </article>
             ) : (

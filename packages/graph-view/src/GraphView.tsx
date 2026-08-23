@@ -20,6 +20,7 @@ export interface GraphViewProps {
   width?: number;
   height?: number;
   onNodeClick?: (nodeId: string, nodeType: 'document' | 'party' | 'clause') => void;
+  highlightNodeId?: string;
 }
 
 interface SimNode extends GraphNode, SimulationNodeDatum {}
@@ -33,6 +34,7 @@ export function GraphView({
   width = 640,
   height = 400,
   onNodeClick,
+  highlightNodeId,
 }: GraphViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -163,6 +165,15 @@ export function GraphView({
         ctx.strokeStyle = '#ffffff';
         ctx.stroke();
 
+        // Highlight ring indicator
+        if (highlightNodeId && highlightNodeId === node.id) {
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, NODE_RADIUS + 5, 0, Math.PI * 2);
+          ctx.strokeStyle = '#f59e0b'; // Amber ring
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
         // Node Label
         ctx.fillStyle = '#e2e8f0';
         ctx.font = 'bold 9px sans-serif';
@@ -196,7 +207,18 @@ export function GraphView({
     return () => {
       simulation.stop();
     };
-  }, [filteredNodes, filteredEdges, width, height]);
+  }, [filteredNodes, filteredEdges, width, height, highlightNodeId]);
+
+  // Centering on highlighted node when specified
+  useEffect(() => {
+    if (!highlightNodeId) return;
+    const pos = positionsRef.current.get(highlightNodeId);
+    if (pos) {
+      transformRef.current.x = width / 2 - pos.x * transformRef.current.k;
+      transformRef.current.y = height / 2 - pos.y * transformRef.current.k;
+      drawRef.current?.();
+    }
+  }, [highlightNodeId, width, height]);
 
   // Handle Pan/Drag Start
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
