@@ -34,3 +34,8 @@ whole change set, not just the package you touched.
 
 For commit style, branch naming, and review expectations shared across
 docsgraph's repos, see [github.com/docsgraph/.github](https://github.com/docsgraph/.github).
+
+## UI Architecture Guidelines
+
+- **Shared UI Components**: Common UI elements (like buttons, dialogs, form controls, list items, search widgets, or graph elements) that are platform-agnostic live in the `packages/ui` workspace package. Both the web target (`apps/web`) and the desktop shell (`apps/desktop`) consume this shared package.
+- **Platform-Specific UI**: Any shell integration, window management controls, or custom layouts specific to a platform live directly in the corresponding app directory (e.g. platform navigation wrappers in `apps/web` or custom window listeners).
