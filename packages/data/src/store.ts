@@ -1,4 +1,4 @@
-import type { SqliteAdapter } from './sqlite/types';
+import type { SqliteAdapter, SqlParam, SqlRow } from './sqlite/types';
 import type { Document, Party, Clause, Relationship } from './types/models';
 import type { SyncOp, RemoteSyncOp, SyncOpKind } from './sync/types';
 import { pendingMigrations } from './schema/migrations';
@@ -19,7 +19,7 @@ export class LocalStore {
       if (firstRow) {
         currentVersion = parseInt(firstRow.value, 10);
       }
-    } catch (e) {
+    } catch {
       // Table doesn't exist yet, version is 0
       currentVersion = 0;
     }
@@ -75,10 +75,11 @@ export class LocalStore {
       'SELECT id, title, content, created_at, updated_at, last_seq FROM documents WHERE id = ?',
       [id]
     );
-    if (rows.length === 0) {
+    const row = rows[0];
+    if (!row) {
       return null;
     }
-    return this.mapDbToDocument(rows[0]);
+    return this.mapDbToDocument(row);
   }
 
   async getDocuments(): Promise<Document[]> {
@@ -98,10 +99,11 @@ export class LocalStore {
         'SELECT id, title, content, created_at, updated_at, last_seq FROM documents WHERE id = ?',
         [id]
       );
-      if (existing.length === 0) {
+      const row = existing[0];
+      if (!row) {
         throw new Error(`Document with id ${id} not found`);
       }
-      const current = this.mapDbToDocument(existing[0]);
+      const current = this.mapDbToDocument(row);
       const updated = {
         ...current,
         ...updates,
@@ -111,7 +113,7 @@ export class LocalStore {
       const keys = Object.keys(updates) as Array<keyof typeof updates>;
       if (keys.length > 0) {
         const setClause = keys.map((k) => `${this.camelToSnake(k)} = ?`).join(', ');
-        const values = keys.map((k) => updates[k] as any);
+        const values = keys.map((k) => updates[k] as SqlParam);
         await tx.exec(
           `UPDATE documents SET ${setClause}, updated_at = ? WHERE id = ?`,
           [...values, now, id]
@@ -161,10 +163,11 @@ export class LocalStore {
       'SELECT id, name, email, created_at, updated_at, last_seq FROM parties WHERE id = ?',
       [id]
     );
-    if (rows.length === 0) {
+    const row = rows[0];
+    if (!row) {
       return null;
     }
-    return this.mapDbToParty(rows[0]);
+    return this.mapDbToParty(row);
   }
 
   async getParties(): Promise<Party[]> {
@@ -184,10 +187,11 @@ export class LocalStore {
         'SELECT id, name, email, created_at, updated_at, last_seq FROM parties WHERE id = ?',
         [id]
       );
-      if (existing.length === 0) {
+      const row = existing[0];
+      if (!row) {
         throw new Error(`Party with id ${id} not found`);
       }
-      const current = this.mapDbToParty(existing[0]);
+      const current = this.mapDbToParty(row);
       const updated = {
         ...current,
         ...updates,
@@ -197,7 +201,7 @@ export class LocalStore {
       const keys = Object.keys(updates) as Array<keyof typeof updates>;
       if (keys.length > 0) {
         const setClause = keys.map((k) => `${this.camelToSnake(k)} = ?`).join(', ');
-        const values = keys.map((k) => updates[k] as any);
+        const values = keys.map((k) => updates[k] as SqlParam);
         await tx.exec(
           `UPDATE parties SET ${setClause}, updated_at = ? WHERE id = ?`,
           [...values, now, id]
@@ -255,10 +259,11 @@ export class LocalStore {
       'SELECT id, document_id, title, text, created_at, updated_at, last_seq FROM clauses WHERE id = ?',
       [id]
     );
-    if (rows.length === 0) {
+    const row = rows[0];
+    if (!row) {
       return null;
     }
-    return this.mapDbToClause(rows[0]);
+    return this.mapDbToClause(row);
   }
 
   async getClausesByDocument(documentId: string): Promise<Clause[]> {
@@ -279,10 +284,11 @@ export class LocalStore {
         'SELECT id, document_id, title, text, created_at, updated_at, last_seq FROM clauses WHERE id = ?',
         [id]
       );
-      if (existing.length === 0) {
+      const row = existing[0];
+      if (!row) {
         throw new Error(`Clause with id ${id} not found`);
       }
-      const current = this.mapDbToClause(existing[0]);
+      const current = this.mapDbToClause(row);
       const updated = {
         ...current,
         ...updates,
@@ -292,7 +298,7 @@ export class LocalStore {
       const keys = Object.keys(updates) as Array<keyof typeof updates>;
       if (keys.length > 0) {
         const setClause = keys.map((k) => `${this.camelToSnake(k)} = ?`).join(', ');
-        const values = keys.map((k) => updates[k] as any);
+        const values = keys.map((k) => updates[k] as SqlParam);
         await tx.exec(
           `UPDATE clauses SET ${setClause}, updated_at = ? WHERE id = ?`,
           [...values, now, id]
@@ -356,10 +362,11 @@ export class LocalStore {
       'SELECT id, source_id, source_type, target_id, target_type, type, created_at, updated_at, last_seq FROM relationships WHERE id = ?',
       [id]
     );
-    if (rows.length === 0) {
+    const row = rows[0];
+    if (!row) {
       return null;
     }
-    return this.mapDbToRelationship(rows[0]);
+    return this.mapDbToRelationship(row);
   }
 
   async getRelationships(): Promise<Relationship[]> {
@@ -489,17 +496,19 @@ export class LocalStore {
             const columns = ['id', ...keys.map((k) => this.camelToSnake(k)), 'created_at', 'updated_at', 'last_seq'];
             const placeholders = columns.map(() => '?').join(', ');
             const now = new Date().toISOString();
-            const values = [
+            const createdAtVal = (payload.createdAt as string | undefined) || now;
+            const updatedAtVal = (payload.updatedAt as string | undefined) || now;
+            const values: SqlParam[] = [
               op.entityId,
-              ...keys.map((k) => (payload as any)[k]),
-              (payload as any).createdAt || now,
-              (payload as any).updatedAt || now,
+              ...keys.map((k) => payload[k] as SqlParam),
+              createdAtVal,
+              updatedAtVal,
               op.sequence,
             ];
 
             await tx.exec(
               `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders})`,
-              values as any[]
+              values
             );
           } else {
             // Entity exists locally: run field-level LWW against offline updates.
@@ -513,11 +522,11 @@ export class LocalStore {
             for (const uOp of unsyncedOps) {
               if (uOp.payload) {
                 try {
-                  const uPayload = JSON.parse(uOp.payload);
+                  const uPayload = JSON.parse(uOp.payload) as Record<string, unknown>;
                   for (const key of Object.keys(uPayload)) {
                     locallyModifiedFields.add(key);
                   }
-                } catch (e) {
+                } catch {
                   // Ignore parse errors
                 }
               }
@@ -526,11 +535,11 @@ export class LocalStore {
             // Apply updates for fields not modified locally offline
             const remotePayload = op.payload || {};
             const updateKeys: string[] = [];
-            const updateValues: any[] = [];
+            const updateValues: SqlParam[] = [];
             for (const key of Object.keys(remotePayload)) {
               if (!locallyModifiedFields.has(key)) {
                 updateKeys.push(`${this.camelToSnake(key)} = ?`);
-                updateValues.push(remotePayload[key]);
+                updateValues.push(remotePayload[key] as SqlParam);
               }
             }
 
@@ -604,62 +613,62 @@ export class LocalStore {
     return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
   }
 
-  private mapDbToDocument(row: any): Document {
+  private mapDbToDocument(row: SqlRow): Document {
     return {
-      id: row.id,
-      title: row.title,
-      content: row.content,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      lastSeq: row.last_seq,
+      id: row.id as string,
+      title: row.title as string,
+      content: row.content as string,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+      lastSeq: row.last_seq as number,
     };
   }
 
-  private mapDbToParty(row: any): Party {
+  private mapDbToParty(row: SqlRow): Party {
     return {
-      id: row.id,
-      name: row.name,
-      email: row.email || null,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      lastSeq: row.last_seq,
+      id: row.id as string,
+      name: row.name as string,
+      email: (row.email as string | null) || null,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+      lastSeq: row.last_seq as number,
     };
   }
 
-  private mapDbToClause(row: any): Clause {
+  private mapDbToClause(row: SqlRow): Clause {
     return {
-      id: row.id,
-      documentId: row.document_id,
-      title: row.title || null,
-      text: row.text,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      lastSeq: row.last_seq,
+      id: row.id as string,
+      documentId: row.document_id as string,
+      title: (row.title as string | null) || null,
+      text: row.text as string,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+      lastSeq: row.last_seq as number,
     };
   }
 
-  private mapDbToRelationship(row: any): Relationship {
+  private mapDbToRelationship(row: SqlRow): Relationship {
     return {
-      id: row.id,
-      sourceId: row.source_id,
-      sourceType: row.source_type,
-      targetId: row.target_id,
-      targetType: row.target_type,
-      type: row.type,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      lastSeq: row.last_seq,
+      id: row.id as string,
+      sourceId: row.source_id as string,
+      sourceType: row.source_type as 'document' | 'party' | 'clause',
+      targetId: row.target_id as string,
+      targetType: row.target_type as 'document' | 'party' | 'clause',
+      type: row.type as string,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+      lastSeq: row.last_seq as number,
     };
   }
 
-  private mapDbToSyncOp(row: any): SyncOp {
+  private mapDbToSyncOp(row: SqlRow): SyncOp {
     return {
-      id: row.id,
-      kind: row.kind,
-      entityType: row.entity_type,
-      entityId: row.entity_id,
-      payload: row.payload ? JSON.parse(row.payload) : null,
-      clientTimestamp: row.client_timestamp,
+      id: row.id as string,
+      kind: row.kind as SyncOpKind,
+      entityType: row.entity_type as string,
+      entityId: row.entity_id as string,
+      payload: row.payload ? (JSON.parse(row.payload as string) as Record<string, unknown>) : null,
+      clientTimestamp: row.client_timestamp as string,
     };
   }
 }

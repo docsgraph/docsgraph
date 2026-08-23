@@ -6,11 +6,11 @@ import type { RemoteSyncOp } from './sync/types';
 // In-Memory SQLite Simulator for Vitest
 class InMemorySqliteAdapter implements SqliteAdapter {
   meta = new Map<string, string>();
-  documents = new Map<string, any>();
-  parties = new Map<string, any>();
-  clauses = new Map<string, any>();
-  relationships = new Map<string, any>();
-  syncOps = new Map<string, any>();
+  documents = new Map<string, SqlRow>();
+  parties = new Map<string, SqlRow>();
+  clauses = new Map<string, SqlRow>();
+  relationships = new Map<string, SqlRow>();
+  syncOps = new Map<string, SqlRow>();
 
   private cleanSql(sql: string): string {
     return sql
@@ -31,65 +31,69 @@ class InMemorySqliteAdapter implements SqliteAdapter {
       const key = (params[0] as string) || (cleaned.includes("'schema_version'") ? 'schema_version' : 'sync_cursor');
       const val = this.meta.get(key);
       if (val === undefined) return [];
-      return [{ value: val }] as any;
+      return [{ value: val }] as unknown as T[];
     }
 
     if (cleaned.startsWith('SELECT id, title, content, created_at, updated_at, last_seq FROM documents')) {
       if (cleaned.includes('WHERE id = ?')) {
         const id = params[0] as string;
         const doc = this.documents.get(id);
-        return doc ? [doc] : [];
+        return doc ? ([doc] as unknown as T[]) : [];
       }
-      return Array.from(this.documents.values()) as any;
+      return Array.from(this.documents.values()) as unknown as T[];
     }
 
     if (cleaned.startsWith('SELECT id, name, email, created_at, updated_at, last_seq FROM parties')) {
       if (cleaned.includes('WHERE id = ?')) {
         const id = params[0] as string;
         const party = this.parties.get(id);
-        return party ? [party] : [];
+        return party ? ([party] as unknown as T[]) : [];
       }
-      return Array.from(this.parties.values()) as any;
+      return Array.from(this.parties.values()) as unknown as T[];
     }
 
     if (cleaned.startsWith('SELECT id, document_id, title, text, created_at, updated_at, last_seq FROM clauses')) {
       if (cleaned.includes('WHERE id = ?')) {
         const id = params[0] as string;
         const clause = this.clauses.get(id);
-        return clause ? [clause] : [];
+        return clause ? ([clause] as unknown as T[]) : [];
       }
       if (cleaned.includes('WHERE document_id = ?')) {
         const docId = params[0] as string;
-        return Array.from(this.clauses.values()).filter((c) => c.document_id === docId) as any;
+        return Array.from(this.clauses.values()).filter((c) => c.document_id === docId) as unknown as T[];
       }
-      return Array.from(this.clauses.values()) as any;
+      return Array.from(this.clauses.values()) as unknown as T[];
     }
 
     if (cleaned.startsWith('SELECT id, source_id, source_type, target_id, target_type, type, created_at, updated_at, last_seq FROM relationships')) {
       if (cleaned.includes('WHERE id = ?')) {
         const id = params[0] as string;
         const rel = this.relationships.get(id);
-        return rel ? [rel] : [];
+        return rel ? ([rel] as unknown as T[]) : [];
       }
-      return Array.from(this.relationships.values()) as any;
+      return Array.from(this.relationships.values()) as unknown as T[];
     }
 
     if (cleaned.startsWith('SELECT id, kind, entity_type, entity_id, payload, client_timestamp FROM sync_ops WHERE seq IS NULL')) {
       const unsynced = Array.from(this.syncOps.values()).filter((op) => op.seq === null || op.seq === undefined);
-      unsynced.sort((a, b) => a.client_timestamp.localeCompare(b.client_timestamp));
-      return unsynced as any;
+      unsynced.sort((a, b) => {
+        const aTime = (a.client_timestamp as string) || '';
+        const bTime = (b.client_timestamp as string) || '';
+        return aTime.localeCompare(bTime);
+      });
+      return unsynced as unknown as T[];
     }
 
     if (cleaned.startsWith('SELECT entity_type, entity_id FROM sync_ops WHERE id = ?')) {
       const id = params[0] as string;
       const op = this.syncOps.get(id);
-      return op ? [{ entity_type: op.entity_type, entity_id: op.entity_id }] as any : [];
+      return op ? ([{ entity_type: op.entity_type as string, entity_id: op.entity_id as string }] as unknown as T[]) : [];
     }
 
     if (cleaned.startsWith('SELECT seq FROM sync_ops WHERE id = ?')) {
       const id = params[0] as string;
       const op = this.syncOps.get(id);
-      return op ? [{ seq: op.seq }] as any : [];
+      return op ? ([{ seq: op.seq as number }] as unknown as T[]) : [];
     }
 
     if (cleaned.startsWith('SELECT payload FROM sync_ops WHERE entity_type = ? AND entity_id = ? AND seq IS NULL')) {
@@ -98,16 +102,17 @@ class InMemorySqliteAdapter implements SqliteAdapter {
       const filtered = Array.from(this.syncOps.values()).filter(
         (op) => op.entity_type === entityType && op.entity_id === entityId && (op.seq === null || op.seq === undefined)
       );
-      return filtered.map((op) => ({ payload: op.payload })) as any;
+      return filtered.map((op) => ({ payload: op.payload as string })) as unknown as T[];
     }
 
     const lastSeqMatch = cleaned.match(/SELECT last_seq FROM (\w+) WHERE id = \?/i);
     if (lastSeqMatch && lastSeqMatch[1]) {
       const table = lastSeqMatch[1].toLowerCase();
       const id = params[0] as string;
-      const map = (this as any)[table] as Map<string, any> | undefined;
+      const adapterRecord = this as unknown as Record<string, Map<string, SqlRow> | undefined>;
+      const map = adapterRecord[table];
       const item = map?.get(id);
-      return item ? [{ last_seq: item.last_seq } as unknown as T] : [];
+      return item ? ([{ last_seq: item.last_seq as number }] as unknown as T[]) : [];
     }
 
     return [];
@@ -138,11 +143,11 @@ class InMemorySqliteAdapter implements SqliteAdapter {
       const id = params[0] as string;
       this.documents.set(id, {
         id,
-        title: params[1],
-        content: params[2],
-        created_at: params[3],
-        updated_at: params[4],
-        last_seq: params[5] || 0,
+        title: params[1] as string,
+        content: params[2] as string,
+        created_at: params[3] as string,
+        updated_at: params[4] as string,
+        last_seq: (params[5] as number) || 0,
       });
       return;
     }
@@ -160,11 +165,11 @@ class InMemorySqliteAdapter implements SqliteAdapter {
       const id = params[0] as string;
       this.parties.set(id, {
         id,
-        name: params[1],
-        email: params[2],
-        created_at: params[3],
-        updated_at: params[4],
-        last_seq: params[5] || 0,
+        name: params[1] as string,
+        email: params[2] as string,
+        created_at: params[3] as string,
+        updated_at: params[4] as string,
+        last_seq: (params[5] as number) || 0,
       });
       return;
     }
@@ -182,12 +187,12 @@ class InMemorySqliteAdapter implements SqliteAdapter {
       const id = params[0] as string;
       this.clauses.set(id, {
         id,
-        document_id: params[1],
-        title: params[2],
-        text: params[3],
-        created_at: params[4],
-        updated_at: params[5],
-        last_seq: params[6] || 0,
+        document_id: params[1] as string,
+        title: params[2] as string,
+        text: params[3] as string,
+        created_at: params[4] as string,
+        updated_at: params[5] as string,
+        last_seq: (params[6] as number) || 0,
       });
       return;
     }
@@ -205,14 +210,14 @@ class InMemorySqliteAdapter implements SqliteAdapter {
       const id = params[0] as string;
       this.relationships.set(id, {
         id,
-        source_id: params[1],
-        source_type: params[2],
-        target_id: params[3],
-        target_type: params[4],
-        type: params[5],
-        created_at: params[6],
-        updated_at: params[7],
-        last_seq: params[8] || 0,
+        source_id: params[1] as string,
+        source_type: params[2] as string,
+        target_id: params[3] as string,
+        target_type: params[4] as string,
+        type: params[5] as string,
+        created_at: params[6] as string,
+        updated_at: params[7] as string,
+        last_seq: (params[8] as number) || 0,
       });
       return;
     }
@@ -230,12 +235,12 @@ class InMemorySqliteAdapter implements SqliteAdapter {
       const id = params[0] as string;
       this.syncOps.set(id, {
         id,
-        kind: params[1],
-        entity_type: params[2],
-        entity_id: params[3],
-        payload: params[4],
-        client_timestamp: params[5],
-        seq: params[6] === undefined ? null : params[6],
+        kind: params[1] as string,
+        entity_type: params[2] as string,
+        entity_id: params[3] as string,
+        payload: params[4] as string,
+        client_timestamp: params[5] as string,
+        seq: params[6] === undefined ? null : (params[6] as number),
       });
       return;
     }
@@ -250,21 +255,22 @@ class InMemorySqliteAdapter implements SqliteAdapter {
     }
   }
 
-  private updateTable(tableMap: Map<string, any>, cleaned: string, params: SqlParam[]): void {
+  private updateTable(tableMap: Map<string, SqlRow>, cleaned: string, params: SqlParam[]): void {
     const id = params[params.length - 1] as string;
     const existing = tableMap.get(id);
     if (!existing) return;
 
     if (cleaned.includes('last_seq = MAX')) {
       const newSeq = params[0] as number;
-      existing.last_seq = Math.max(existing.last_seq || 0, newSeq);
+      existing.last_seq = Math.max((existing.last_seq as number) || 0, newSeq);
     } else {
       const setPart = cleaned.substring(cleaned.indexOf('SET') + 4, cleaned.indexOf('WHERE')).trim();
       const keys = setPart.split(',').map((k) => (k.split('=')[0] || '').trim());
       for (let i = 0; i < keys.length; i++) {
         const key = keys[i];
-        if (key) {
-          existing[key] = params[i];
+        const val = params[i];
+        if (key && val !== undefined) {
+          existing[key] = val;
         }
       }
     }
@@ -433,7 +439,8 @@ describe('LocalStore Core Model & Persistence', () => {
 
       // Verify local op log is updated
       const opInDb = adapter.syncOps.get(localOpId);
-      expect(opInDb.seq).toBe(42);
+      expect(opInDb).toBeDefined();
+      expect(opInDb!.seq).toBe(42);
 
       // Verify target entity's last_seq is updated
       const updatedDoc = await store.getDocument('doc-xyz');
