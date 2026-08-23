@@ -71,6 +71,9 @@ export function App() {
   }>>([]);
   const [showConflictModal, setShowConflictModal] = useState(false);
 
+  // Derived state to avoid undefined indexing warnings
+  const currentConflict = activeConflicts[0];
+
   // Real offline state sync with navigator
   useEffect(() => {
     const handleOnlineStatus = () => {
@@ -149,11 +152,10 @@ export function App() {
 
   // Resolve sync conflict per documented policy (No data loss)
   const handleResolveConflict = async (resolution: 'local' | 'remote') => {
-    if (activeConflicts.length === 0) return;
-    const conflict = activeConflicts[0];
+    if (!currentConflict) return;
 
     if (resolution === 'remote') {
-      await store.updateDocument(conflict.entityId, { title: conflict.remoteValue });
+      await store.updateDocument(currentConflict.entityId, { title: currentConflict.remoteValue });
       await loadData();
     }
 
@@ -872,7 +874,7 @@ export function App() {
       </div>
 
       {/* Conflict Resolution Modal */}
-      {showConflictModal && syncStatus === 'conflict' && activeConflicts.length > 0 && (
+      {showConflictModal && syncStatus === 'conflict' && currentConflict && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4">
             <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
@@ -880,13 +882,13 @@ export function App() {
               <div>
                 <h3 className="text-md font-bold text-slate-100">Sync Conflict Detected</h3>
                 <span className="text-xs text-slate-500 font-mono">
-                  Entity: {activeConflicts[0].entityType} ({activeConflicts[0].entityId})
+                  Entity: {currentConflict.entityType} ({currentConflict.entityId})
                 </span>
               </div>
             </div>
 
             <p className="text-xs text-slate-405 text-slate-400">
-              The field <code className="text-amber-400 font-mono">{activeConflicts[0].fieldName}</code> was modified locally while offline, but diverging updates were also found on the server.
+              The field <code className="text-amber-400 font-mono">{currentConflict.fieldName}</code> was modified locally while offline, but diverging updates were also found on the server.
             </p>
 
             {/* Side-by-Side Comparison */}
@@ -897,7 +899,7 @@ export function App() {
                   Local (Your Offline Edit)
                 </span>
                 <div className="bg-slate-900 p-2.5 rounded text-xs text-slate-200 min-h-[60px] font-mono break-all">
-                  {activeConflicts[0].localValue}
+                  {currentConflict.localValue}
                 </div>
                 <span className="text-[9px] text-slate-500">
                   Preserved offline. No data loss.
@@ -910,7 +912,7 @@ export function App() {
                   Remote (Server Changes)
                 </span>
                 <div className="bg-slate-950/50 p-2.5 rounded text-xs text-slate-200 min-h-[60px] font-mono break-all">
-                  {activeConflicts[0].remoteValue}
+                  {currentConflict.remoteValue}
                 </div>
                 <span className="text-[9px] text-slate-500">
                   Last Write Wins server sequence.
