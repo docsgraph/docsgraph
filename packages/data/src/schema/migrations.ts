@@ -7,6 +7,7 @@
  * whichever `SqliteAdapter.exec` they're using.
  */
 import migration0001 from './migrations/0001_init.sql?raw';
+import migration0002 from './migrations/0002_data_model.sql?raw';
 
 export interface Migration {
   /** Sequential id, matches the file's numeric prefix. */
@@ -17,7 +18,10 @@ export interface Migration {
   sql: string;
 }
 
-export const migrations: Migration[] = [{ id: 1, name: 'init', sql: migration0001 }];
+export const migrations: Migration[] = [
+  { id: 1, name: 'init', sql: migration0001 },
+  { id: 2, name: 'data_model', sql: migration0002 },
+];
 
 /** Returns migrations with `id` greater than `afterId`, in order. */
 export function pendingMigrations(afterId: number): Migration[] {
