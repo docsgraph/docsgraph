@@ -3,5 +3,5 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "../data/src/types/sql-raw.d.ts"]
 }

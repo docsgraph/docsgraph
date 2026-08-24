@@ -8,11 +8,16 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@docsgraph/data": "workspace:*"
   },
   "devDependencies": {
     "@docsgraph/config": "workspace:*",
     "eslint": "^9.15.0",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
   }
 }
