@@ -1,4 +1,4 @@
-import type { PullResult, PushResult, SyncClient, SyncCursor, SyncOp } from './types';
+import type { PullResult, PushResult, SyncClient, SyncCursor, SyncOp, SyncOpKind } from './types';
 
 /**
  * Stub sync client. No network calls happen here — this exists so
@@ -46,18 +46,60 @@ export class HttpSyncClient implements SyncClient {
     return headers;
   }
 
+  private getClientId(): string {
+    const key = 'docsgraph_client_id';
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = window.localStorage.getItem(key);
+      if (stored) return stored;
+    }
+    const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(key, uuid);
+    }
+    return uuid;
+  }
+
   async push(ops: SyncOp[], cursor: SyncCursor): Promise<PushResult> {
+    const serializedOps = ops.map((op) => ({
+      op_id: op.id,
+      entity_type: op.entityType,
+      entity_id: op.entityId,
+      operation: op.kind,
+      payload: op.payload,
+      client_timestamp: op.clientTimestamp,
+      seq: null,
+    }));
+
     const response = await fetch(`${this.baseUrl}/api/v1/sync/push`, {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify({ ops, cursor }),
+      body: JSON.stringify({
+        client_id: this.getClientId(),
+        cursor,
+        ops: serializedOps,
+      }),
     });
 
     if (!response.ok) {
       throw new Error(`Push failed with status ${response.status}: ${response.statusText}`);
     }
 
-    return (await response.json()) as PushResult;
+    const data = (await response.json()) as {
+      cursor: number;
+      acks: Array<{ op_id: string; seq: number }>;
+    };
+
+    return {
+      cursor: data.cursor,
+      acks: data.acks.map((ack) => ({
+        opId: ack.op_id,
+        seq: ack.seq,
+      })),
+    };
   }
 
   async pull(cursor: SyncCursor): Promise<PullResult> {
@@ -71,6 +113,33 @@ export class HttpSyncClient implements SyncClient {
       throw new Error(`Pull failed with status ${response.status}: ${response.statusText}`);
     }
 
-    return (await response.json()) as PullResult;
+    const data = (await response.json()) as {
+      cursor: number;
+      ops: Array<{
+        op_id: string;
+        entity_type: string;
+        entity_id: string;
+        operation: string;
+        payload: Record<string, unknown> | null;
+        client_timestamp: string;
+        seq: number;
+      }>;
+    };
+
+    const ops = data.ops.map((op) => ({
+      id: op.op_id,
+      entityType: op.entity_type,
+      entityId: op.entity_id,
+      kind: op.operation as SyncOpKind,
+      payload: op.payload,
+      clientTimestamp: op.client_timestamp,
+      sequence: op.seq,
+    }));
+
+    return {
+      ops,
+      cursor: data.cursor,
+      hasMore: false,
+    };
   }
 }
