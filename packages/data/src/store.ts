@@ -4,6 +4,13 @@ import type { SyncOp, RemoteSyncOp, SyncOpKind } from './sync/types';
 import { pendingMigrations } from './schema/migrations';
 
 export class LocalStore {
+  private readonly allowedColumns: Record<string, Set<string>> = {
+    documents: new Set(['id', 'title', 'content', 'created_at', 'updated_at', 'last_seq']),
+    parties: new Set(['id', 'name', 'email', 'created_at', 'updated_at', 'last_seq']),
+    clauses: new Set(['id', 'document_id', 'title', 'text', 'created_at', 'updated_at', 'last_seq']),
+    relationships: new Set(['id', 'source_id', 'source_type', 'target_id', 'target_type', 'type', 'created_at', 'updated_at', 'last_seq']),
+  };
+
   constructor(private adapter: SqliteAdapter) {}
 
   /**
@@ -499,7 +506,11 @@ export class LocalStore {
           if (existingEntity.length === 0) {
             // Insert new entity
             const payload = op.payload || {};
-            const keys = Object.keys(payload);
+            const tableAllowed = this.allowedColumns[tableName];
+            if (!tableAllowed) {
+              throw new Error(`Unauthorized table name: ${tableName}`);
+            }
+            const keys = Object.keys(payload).filter((k) => tableAllowed.has(this.camelToSnake(k)));
             const columns = ['id', ...keys.map((k) => this.camelToSnake(k)), 'created_at', 'updated_at', 'last_seq'];
             const placeholders = columns.map(() => '?').join(', ');
             const now = new Date().toISOString();
@@ -543,9 +554,14 @@ export class LocalStore {
             const remotePayload = op.payload || {};
             const updateKeys: string[] = [];
             const updateValues: SqlParam[] = [];
+            const tableAllowed = this.allowedColumns[tableName];
+            if (!tableAllowed) {
+              throw new Error(`Unauthorized table name: ${tableName}`);
+            }
             for (const key of Object.keys(remotePayload)) {
-              if (!locallyModifiedFields.has(key)) {
-                updateKeys.push(`${this.camelToSnake(key)} = ?`);
+              const snakeKey = this.camelToSnake(key);
+              if (!locallyModifiedFields.has(key) && tableAllowed.has(snakeKey)) {
+                updateKeys.push(`${snakeKey} = ?`);
                 updateValues.push(remotePayload[key] as SqlParam);
               }
             }
