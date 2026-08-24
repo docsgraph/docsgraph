@@ -47,11 +47,7 @@ export function App() {
   const [highlightNodeId, setHighlightNodeId] = useState<string | null>(null);
 
   // Status mapping for contract analysis
-  const [docStatuses, setDocStatuses] = useState<Record<string, 'completed' | 'pending' | 'failed'>>({
-    'doc-1': 'completed',
-    'doc-2': 'pending',
-    'doc-3': 'failed',
-  });
+  const [docStatuses, setDocStatuses] = useState<Record<string, 'completed' | 'pending' | 'failed'>>({});
 
   // Automatically clear graph highlight when opening or switching documents
   useEffect(() => {
@@ -71,6 +67,66 @@ export function App() {
   // Query clauses associated with a document
   const getDocClauses = (docId: string) => {
     return clauses.filter((c) => c.documentId === docId);
+  };
+
+  // Dynamically extract details and deadlines from clauses and document content
+  const getDocKeyDetails = (docId: string) => {
+    const doc = documents.find((d) => d.id === docId);
+    if (!doc) return [];
+
+    const docClauses = getDocClauses(docId);
+    const details: Array<{ label: string; value: string }> = [];
+
+    // Scan both clause texts and the full document body for robust detail extraction
+    const textsToScan = [
+      ...docClauses.map((c) => c.text),
+      doc.content,
+    ];
+
+    const hasLabel = (lbl: string) => details.some((d) => d.label === lbl);
+
+    textsToScan.forEach((txt) => {
+      // 1. Payment Window
+      if (!hasLabel('Payment Window')) {
+        const daysMatch = txt.match(/\b(\d+|thirty|sixty|ninety)\s*days?\b/i);
+        if (daysMatch && daysMatch[1] && (txt.toLowerCase().includes('payment') || txt.toLowerCase().includes('invoice') || txt.toLowerCase().includes('paid'))) {
+          const daysVal = daysMatch[1];
+          const val = daysVal.charAt(0).toUpperCase() + daysVal.slice(1) + ' Days';
+          details.push({ label: 'Payment Window', value: val });
+        }
+      }
+
+      // 2. Late Interest Fee
+      if (!hasLabel('Late Interest Fee')) {
+        const pctMatch = txt.match(/\b(\d+(?:\.\d+)?%)\s*(monthly|annual)?\b/i);
+        if (pctMatch && pctMatch[1] && (txt.toLowerCase().includes('interest') || txt.toLowerCase().includes('fee') || txt.toLowerCase().includes('late'))) {
+          const pctVal = pctMatch[1];
+          const periodVal = pctMatch[2];
+          const period = periodVal ? periodVal.charAt(0).toUpperCase() + periodVal.slice(1) : 'Monthly';
+          details.push({ label: 'Late Interest Fee', value: `${pctVal} ${period}` });
+        }
+      }
+
+      // 3. Survival Period
+      if (!hasLabel('Survival Period')) {
+        const yearsMatch = txt.match(/\b(\d+|five|ten)\s*years?\b/i);
+        if (yearsMatch && yearsMatch[1] && (txt.toLowerCase().includes('confidentiality') || txt.toLowerCase().includes('survive'))) {
+          const yearsVal = yearsMatch[1];
+          const val = yearsVal.charAt(0).toUpperCase() + yearsVal.slice(1) + ' Years';
+          details.push({ label: 'Survival Period', value: val });
+        }
+      }
+
+      // 4. Target Delivery Date
+      if (!hasLabel('Target Delivery Date')) {
+        const dateMatch = txt.match(/\b([A-Z][a-z]+ \d{1,2}, \d{4})\b/);
+        if (dateMatch && dateMatch[1] && (txt.toLowerCase().includes('deliver') || txt.toLowerCase().includes('by') || txt.toLowerCase().includes('date') || txt.toLowerCase().includes('deadline'))) {
+          details.push({ label: 'Target Delivery Date', value: dateMatch[1] });
+        }
+      }
+    });
+
+    return details;
   };
 
   // Highlight specific clause passage in the reader
@@ -95,12 +151,99 @@ export function App() {
     setSelectedSnippet(null);
   };
 
-  // Trigger analysis retry simulation
-  const handleRetryAnalysis = (docId: string) => {
+  // Trigger real analysis on the client
+  const handleRetryAnalysis = async (docId: string) => {
     setDocStatuses((prev) => ({ ...prev, [docId]: 'pending' }));
-    setTimeout(() => {
+
+    // Simulate analysis processing latency
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    const doc = documents.find((d) => d.id === docId);
+    if (!doc) {
+      setDocStatuses((prev) => ({ ...prev, [docId]: 'failed' }));
+      return;
+    }
+
+    try {
+      // 1. Extract and persist clauses dynamically from document content sentences
+      const sentences = doc.content.split(/[.!?]+/).map((s) => s.trim()).filter(Boolean);
+      let clauseCount = 0;
+
+      for (const sentence of sentences) {
+        let title = '';
+        if (sentence.toLowerCase().includes('invoice') || sentence.toLowerCase().includes('paid') || sentence.toLowerCase().includes('payment')) {
+          title = 'Payment Terms';
+        } else if (sentence.toLowerCase().includes('confidential') || sentence.toLowerCase().includes('survive') || sentence.toLowerCase().includes('disclosure')) {
+          title = 'Confidentiality & Term';
+        } else if (sentence.toLowerCase().includes('deliver') || sentence.toLowerCase().includes('specification') || sentence.toLowerCase().includes('design')) {
+          title = 'Deliverables';
+        } else if (sentence.toLowerCase().includes('indemnify') || sentence.toLowerCase().includes('liability') || sentence.toLowerCase().includes('harmless')) {
+          title = 'Indemnification';
+        }
+
+        if (title) {
+          const clauseId = `clause-${docId}-${clauseCount++}-${Math.random().toString(36).substring(2, 5)}`;
+          await store.createClause({
+            id: clauseId,
+            documentId: docId,
+            title,
+            text: sentence,
+          });
+
+          await store.createRelationship({
+            id: `rel-${clauseId}`,
+            sourceId: docId,
+            sourceType: 'document',
+            targetId: clauseId,
+            targetType: 'clause',
+            type: 'contains',
+          });
+        }
+      }
+
+      // 2. Extract and associate parties using regex matching corporate suffixes
+      const partyRegex = /\b([A-Z][a-zA-Z0-9]*)\s+(Corp|LLC|Ltd|Inc)\b/g;
+      let match;
+      const foundParties: string[] = [];
+      while ((match = partyRegex.exec(doc.content)) !== null) {
+        const partyName = `${match[1]} ${match[2]}`;
+        if (!foundParties.includes(partyName)) {
+          foundParties.push(partyName);
+        }
+      }
+
+      for (const partyName of foundParties) {
+        const existingParties = await store.getParties();
+        const party = existingParties.find((p) => p.name.toLowerCase() === partyName.toLowerCase());
+        let partyId = party?.id;
+
+        if (!party) {
+          partyId = `party-${Math.random().toString(36).substring(2, 7)}`;
+          await store.createParty({
+            id: partyId,
+            name: partyName,
+            email: `contact@${partyName.toLowerCase().replace(/\s+/g, '')}.com`,
+          });
+        }
+
+        if (partyId) {
+          await store.createRelationship({
+            id: `rel-${docId}-${partyId}`,
+            sourceId: docId,
+            sourceType: 'document',
+            targetId: partyId,
+            targetType: 'party',
+            type: 'signed_by',
+          });
+        }
+      }
+
+      await loadData();
       setDocStatuses((prev) => ({ ...prev, [docId]: 'completed' }));
-    }, 2000);
+    } catch (err) {
+      console.error('Analysis failed:', err);
+      setDocStatuses((prev) => ({ ...prev, [docId]: 'failed' }));
+    }
   };
 
   // Helper to load all entities from local store
@@ -113,6 +256,24 @@ export function App() {
     setParties(prts);
     setClauses(cls);
     setRelationships(rels);
+
+    // Derive document status dynamically from database state
+    setDocStatuses((prev) => {
+      const nextStatuses: Record<string, 'completed' | 'pending' | 'failed'> = {};
+      docs.forEach((doc) => {
+        const docClauses = cls.filter((c) => c.documentId === doc.id);
+        if (prev[doc.id] === 'pending') {
+          nextStatuses[doc.id] = 'pending';
+        } else if (docClauses.length > 0) {
+          nextStatuses[doc.id] = 'completed';
+        } else if (doc.id === 'doc-2') {
+          nextStatuses[doc.id] = 'pending';
+        } else {
+          nextStatuses[doc.id] = 'failed';
+        }
+      });
+      return nextStatuses;
+    });
   }
 
   // Initialize DB and seed
@@ -605,37 +766,28 @@ export function App() {
                         </div>
 
                         {/* Key Terms / Summary */}
-                        <div className="flex flex-col gap-2 bg-slate-900/40 border border-slate-800/80 rounded-lg p-3">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                            Key Details & Deadlines
-                          </span>
-                          <div className="flex flex-col gap-2 text-xs">
-                            {activeDoc.id === 'doc-1' && (
-                              <>
-                                <div className="flex justify-between border-b border-slate-850 pb-1">
-                                  <span className="text-slate-400">Payment Window:</span>
-                                  <span className="font-semibold text-slate-200">30 Days</span>
+                        {getDocKeyDetails(activeDoc.id).length > 0 && (
+                          <div className="flex flex-col gap-2 bg-slate-900/40 border border-slate-800/80 rounded-lg p-3">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                              Key Details & Deadlines
+                            </span>
+                            <div className="flex flex-col gap-2 text-xs">
+                              {getDocKeyDetails(activeDoc.id).map((detail, idx) => (
+                                <div
+                                  key={detail.label}
+                                  className={`flex justify-between ${
+                                    idx < getDocKeyDetails(activeDoc.id).length - 1
+                                      ? 'border-b border-slate-800 pb-1'
+                                      : ''
+                                  }`}
+                                >
+                                  <span className="text-slate-400">{detail.label}:</span>
+                                  <span className="font-semibold text-slate-200">{detail.value}</span>
                                 </div>
-                                <div className="flex justify-between">
-                                  <span className="text-slate-400">Late Interest Fee:</span>
-                                  <span className="font-semibold text-slate-200">1.5% Monthly</span>
-                                </div>
-                              </>
-                            )}
-                            {activeDoc.id === 'doc-2' && (
-                              <div className="flex justify-between">
-                                <span className="text-slate-400">Survival Period:</span>
-                                <span className="font-semibold text-slate-200">5 Years</span>
-                              </div>
-                            )}
-                            {activeDoc.id === 'doc-3' && (
-                              <div className="flex justify-between">
-                                <span className="text-slate-400">Target Delivery Date:</span>
-                                <span className="font-semibold text-slate-200">Sept 15, 2026</span>
-                              </div>
-                            )}
+                              ))}
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     )}
                   </div>
