@@ -3,7 +3,7 @@ import { GraphView } from '@docsgraph/graph-view';
 import type { GraphEdge, GraphNode } from '@docsgraph/graph-view';
 import { Button } from '@docsgraph/ui';
 import { LocalStore, InMemorySqliteAdapter, SyncManager, HttpSyncClient } from '@docsgraph/data';
-import type { Party, Clause, Relationship, Conflict } from '@docsgraph/data';
+import type { Party, Clause, Relationship, Conflict, SyncStatus } from '@docsgraph/data';
 import { search } from '@docsgraph/search';
 import type { EvidenceSnippet } from '@docsgraph/search';
 
@@ -30,7 +30,7 @@ const SEED_DOCS = [
 const adapter = new InMemorySqliteAdapter();
 const store = new LocalStore(adapter);
 
-let syncStatusListener: ((status: any) => void) | null = null;
+let syncStatusListener: ((status: SyncStatus) => void) | null = null;
 
 const syncClient = new HttpSyncClient({
   baseUrl: 'http://localhost:8000',

@@ -587,7 +587,7 @@ export class LocalStore {
                     this.activeConflicts.push({
                       id: `conflict-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
                       entityId: op.entityId,
-                      entityType: op.entityType as any,
+                      entityType: op.entityType as 'document' | 'clause' | 'party',
                       fieldName: key,
                       localValue: String(localVal),
                       remoteValue: String(remoteVal),
