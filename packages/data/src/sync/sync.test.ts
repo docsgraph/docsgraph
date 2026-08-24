@@ -183,7 +183,7 @@ describe('Sync client & SyncManager tests', () => {
 
       fetchMock.mockResolvedValue({
         ok: true,
-        json: async () => ({ accepted: 1, cursor: 12 }),
+        json: async () => ({ acks: [], cursor: 12 }),
       });
 
       await client.push([], 5);
@@ -239,7 +239,7 @@ describe('Sync client & SyncManager tests', () => {
       // 1st fetch call: push
       fetchMock.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ accepted: 1, cursor: 10 }),
+        json: async () => ({ acks: [{ op_id: 'op-local-1', seq: 10 }], cursor: 10 }),
       });
 
       // 2nd fetch call: pull
@@ -256,9 +256,18 @@ describe('Sync client & SyncManager tests', () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          ops: [remoteOp],
+          ops: [
+            {
+              op_id: remoteOp.id,
+              entity_type: remoteOp.entityType,
+              entity_id: remoteOp.entityId,
+              operation: remoteOp.kind,
+              payload: remoteOp.payload,
+              client_timestamp: remoteOp.clientTimestamp,
+              seq: remoteOp.sequence,
+            }
+          ],
           cursor: 15,
-          hasMore: false,
         }),
       });
 
