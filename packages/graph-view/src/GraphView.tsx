@@ -1,6 +1,6 @@
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from 'd3-force';
 import type { Simulation, SimulationLinkDatum, SimulationNodeDatum } from 'd3-force';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 export interface GraphNode {
   id: string;
@@ -61,18 +61,25 @@ export function GraphView({
   // Redraw callback ref for triggering render on non-tick interaction frames
   const drawRef = useRef<() => void>();
 
-  // Filter nodes & edges dynamically
-  const filteredNodes = nodes.filter((n) => {
-    if (n.type === 'document') return showDocs;
-    if (n.type === 'party') return showParties;
-    if (n.type === 'clause') return showClauses;
-    return true;
-  });
-
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
-  const filteredEdges = edges.filter(
-    (e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target)
+  // Filter nodes & edges dynamically.
+  // Memoized so an unrelated parent re-render doesn't produce new array
+  // references, which would otherwise re-trigger the simulation effect below
+  // and rebuild simNodesRef mid-drag, orphaning draggedNodeRef's node.
+  const filteredNodes = useMemo(
+    () =>
+      nodes.filter((n) => {
+        if (n.type === 'document') return showDocs;
+        if (n.type === 'party') return showParties;
+        if (n.type === 'clause') return showClauses;
+        return true;
+      }),
+    [nodes, showDocs, showParties, showClauses]
   );
+
+  const filteredEdges = useMemo(() => {
+    const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
+    return edges.filter((e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target));
+  }, [edges, filteredNodes]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
