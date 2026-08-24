@@ -266,10 +266,13 @@ export function App() {
           nextStatuses[doc.id] = 'pending';
         } else if (docClauses.length > 0) {
           nextStatuses[doc.id] = 'completed';
-        } else if (doc.id === 'doc-2') {
-          nextStatuses[doc.id] = 'pending';
-        } else {
+        } else if (prev[doc.id] === 'failed') {
+          // Preserve an explicit prior failure (e.g. from a retry that errored)
+          // rather than assuming failure for a document that just hasn't been
+          // analyzed yet.
           nextStatuses[doc.id] = 'failed';
+        } else {
+          nextStatuses[doc.id] = 'pending';
         }
       });
       return nextStatuses;
