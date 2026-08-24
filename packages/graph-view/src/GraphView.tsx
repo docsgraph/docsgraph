@@ -1,5 +1,5 @@
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from 'd3-force';
-import type { SimulationLinkDatum, SimulationNodeDatum } from 'd3-force';
+import type { Simulation, SimulationLinkDatum, SimulationNodeDatum } from 'd3-force';
 import { useEffect, useRef, useState } from 'react';
 
 export interface GraphNode {
@@ -51,6 +51,10 @@ export function GraphView({
   const hasDraggedRef = useRef(false);
   const dragStartPosRef = useRef({ x: 0, y: 0 });
 
+  // Live simulation and node references for drag events
+  const simNodesRef = useRef<SimNode[]>([]);
+  const simulationRef = useRef<Simulation<SimNode, SimLink> | null>(null);
+
   // Cache node positions to maintain stability during filter toggles or document updates
   const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
@@ -85,6 +89,7 @@ export function GraphView({
         y: cached ? cached.y : undefined,
       };
     });
+    simNodesRef.current = simNodes;
 
     const simLinks: SimLink[] = filteredEdges.map((edge) => ({
       source: edge.source,
@@ -193,8 +198,11 @@ export function GraphView({
       .force('center', forceCenter(width / 2, height / 2))
       .on('tick', draw);
 
+    simulationRef.current = simulation;
+
     return () => {
       simulation.stop();
+      simulationRef.current = null;
     };
   }, [filteredNodes, filteredEdges, width, height]);
 
@@ -229,14 +237,17 @@ export function GraphView({
     }
 
     if (clickedNodeId) {
-      const node = filteredNodes.find((n) => n.id === clickedNodeId);
-      if (node) {
-        const simNode = node as SimNode;
-        draggedNodeRef.current = simNode;
+      const liveNode = simNodesRef.current.find((n) => n.id === clickedNodeId);
+      if (liveNode) {
+        draggedNodeRef.current = liveNode;
         hasDraggedRef.current = false;
         dragStartPosRef.current = { x: mx, y: my };
-        simNode.fx = simNode.x ?? gx;
-        simNode.fy = simNode.y ?? gy;
+        liveNode.fx = liveNode.x ?? gx;
+        liveNode.fy = liveNode.y ?? gy;
+
+        if (simulationRef.current) {
+          simulationRef.current.alphaTarget(0.3).restart();
+        }
       }
     } else {
       isPanningRef.current = true;
@@ -285,6 +296,10 @@ export function GraphView({
       const node = draggedNodeRef.current;
       node.fx = null;
       node.fy = null;
+
+      if (simulationRef.current) {
+        simulationRef.current.alphaTarget(0);
+      }
 
       if (!hasDraggedRef.current && onNodeClick) {
         onNodeClick(node.id, node.type);
