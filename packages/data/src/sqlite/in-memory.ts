@@ -84,18 +84,41 @@ export class InMemorySqliteAdapter implements SqliteAdapter {
         const row = this.tables.sync_ops.find((r) => r.id === id);
         return (row ? [row] : []) as unknown as T[];
       }
-      if (cleaned.includes('WHERE seq IS NULL')) {
+      if (cleaned.includes('entity_type = ?') && cleaned.includes('entity_id = ?') && cleaned.includes('seq IS NULL')) {
+        const entityType = params[0] as string;
+        const entityId = params[1] as string;
+        const rows = this.tables.sync_ops.filter(
+          (r) => r.entity_type === entityType && r.entity_id === entityId && (r.seq === null || r.seq === undefined)
+        );
+        return rows as unknown as T[];
+      }
+      if (cleaned.includes('seq IS NULL') || cleaned.includes('seq is null')) {
         return this.tables.sync_ops.filter((r) => r.seq === null || r.seq === undefined) as unknown as T[];
       }
       return this.tables.sync_ops as unknown as T[];
     }
 
-    return [];
+    throw new Error(`Unrecognized SQL query: ${sql}`);
+  }
+
+  private camelToSnake(str: string): string {
+    return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
   }
 
   async exec(sql: string, params: SqlParam[] = []): Promise<void> {
     const cleaned = sql.replace(/\s+/g, ' ').trim();
 
+    // 1. DDL Statements: bypass validation
+    if (
+      cleaned.includes('CREATE TABLE') ||
+      cleaned.includes('CREATE INDEX') ||
+      cleaned.includes('DROP TABLE') ||
+      cleaned.startsWith('PRAGMA')
+    ) {
+      return;
+    }
+
+    // 2. Specialized Key-Value metadata store handling
     if (cleaned.includes('INSERT INTO _docsgraph_meta') || cleaned.includes('ON CONFLICT (key) DO UPDATE')) {
       let key = '';
       let val = '';
@@ -118,161 +141,125 @@ export class InMemorySqliteAdapter implements SqliteAdapter {
       return;
     }
 
-    if (cleaned.includes('INSERT INTO documents')) {
-      this.tables.documents.push({
-        id: params[0] as string,
-        title: params[1] as string,
-        content: params[2] as string,
-        created_at: params[3] as string,
-        updated_at: params[4] as string,
-        last_seq: params[5] as number,
-      });
-      return;
-    }
+    // 3. Generic UPDATE handler: parses assignments and executes changes dynamically
+    if (cleaned.includes('UPDATE ')) {
+      const updateMatch = cleaned.match(/^UPDATE\s+(\w+)\s+SET\s+(.+?)\s+WHERE\s+id\s*=\s*\?/i);
+      if (updateMatch && updateMatch[1] && updateMatch[2]) {
+        const tableName = updateMatch[1].toLowerCase();
+        const assignmentsStr = updateMatch[2];
+        const id = params[params.length - 1] as string;
 
-    if (cleaned.includes('UPDATE documents SET')) {
-      const id = params[params.length - 1] as string;
-      const idx = this.tables.documents.findIndex((r) => r.id === id);
-      if (idx !== -1) {
-        const current = this.tables.documents[idx];
-        if (current) {
-          if (cleaned.includes('title = ?')) {
-            current.title = params[0] as string;
-            current.content = params[1] as string;
-            current.updated_at = params[2] as string;
-            current.last_seq = params[3] as number;
-          } else if (cleaned.includes('last_seq = ?')) {
-            current.last_seq = params[0] as number;
+        const table = this.tables[tableName as keyof typeof this.tables];
+        if (!table) {
+          throw new Error(`Table '${tableName}' does not exist in InMemorySqliteAdapter`);
+        }
+
+        const row = table.find((r) => r.id === id);
+        if (row) {
+          const assignments: string[] = [];
+          let currentExpr = '';
+          let parenDepth = 0;
+          for (let i = 0; i < assignmentsStr.length; i++) {
+            const char = assignmentsStr[i];
+            if (char === '(') parenDepth++;
+            else if (char === ')') parenDepth--;
+
+            if (char === ',' && parenDepth === 0) {
+              assignments.push(currentExpr.trim());
+              currentExpr = '';
+            } else {
+              currentExpr += char;
+            }
+          }
+          if (currentExpr.trim()) {
+            assignments.push(currentExpr.trim());
+          }
+
+          let paramIdx = 0;
+          for (const assignment of assignments) {
+            const eqIdx = assignment.indexOf('=');
+            if (eqIdx === -1) continue;
+            const column = this.camelToSnake(assignment.substring(0, eqIdx).trim()).toLowerCase();
+            const valueExpr = assignment.substring(eqIdx + 1).trim();
+
+            const placeholdersCount = (valueExpr.match(/\?/g) || []).length;
+            if (placeholdersCount === 1) {
+              const val = params[paramIdx++] ?? null;
+              if (valueExpr.toLowerCase().includes('max(')) {
+                const currentVal = (row[column] as number) || 0;
+                row[column] = Math.max(currentVal, val as number);
+              } else {
+                row[column] = val;
+              }
+            } else if (placeholdersCount === 0) {
+              // E.g. static values or NULL if needed
+            } else {
+              paramIdx += placeholdersCount;
+            }
           }
         }
+        return;
       }
-      return;
     }
 
-    if (cleaned.includes('DELETE FROM documents')) {
-      const id = params[0] as string;
-      this.tables.documents = this.tables.documents.filter((r) => r.id !== id);
-      return;
+    // 4. Generic DELETE handler
+    if (cleaned.includes('DELETE FROM ')) {
+      const deleteMatch = cleaned.match(/^DELETE\s+FROM\s+(\w+)\s+WHERE\s+id\s*=\s*\?/i);
+      if (deleteMatch && deleteMatch[1]) {
+        const tableName = deleteMatch[1].toLowerCase();
+        const id = params[0] as string;
+        const table = this.tables[tableName as keyof typeof this.tables];
+        if (table) {
+          this.tables[tableName as keyof typeof this.tables] = table.filter((r) => r.id !== id);
+        }
+        return;
+      }
     }
 
-    if (cleaned.includes('INSERT INTO clauses')) {
-      this.tables.clauses.push({
-        id: params[0] as string,
-        document_id: params[1] as string,
-        title: params[2] as string,
-        text: params[3] as string,
-        created_at: params[4] as string,
-        updated_at: params[5] as string,
-        last_seq: params[6] as number,
-      });
-      return;
-    }
+    // 5. Generic INSERT handler: handles column-to-parameter binding, literals, and NULLs
+    if (cleaned.startsWith('INSERT ')) {
+      const insertMatch = cleaned.match(/^INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+      if (insertMatch && insertMatch[1] && insertMatch[2] && insertMatch[3]) {
+        const tableName = insertMatch[1].toLowerCase();
+        const columns = insertMatch[2].split(',').map((c) => this.camelToSnake(c.trim()).toLowerCase());
+        const valuesExprs = insertMatch[3].split(',').map((v) => v.trim());
 
-    if (cleaned.includes('UPDATE clauses SET')) {
-      const id = params[params.length - 1] as string;
-      const idx = this.tables.clauses.findIndex((r) => r.id === id);
-      if (idx !== -1) {
-        const current = this.tables.clauses[idx];
-        if (current) {
-          if (cleaned.includes('title = ?')) {
-            current.title = params[0] as string;
-            current.text = params[1] as string;
-            current.updated_at = params[2] as string;
-            current.last_seq = params[3] as number;
-          } else if (cleaned.includes('last_seq = ?')) {
-            current.last_seq = params[0] as number;
+        const row: SqlRow = {};
+        let paramIdx = 0;
+        for (let i = 0; i < columns.length; i++) {
+          const col = columns[i];
+          const expr = valuesExprs[i];
+          if (!col || !expr) continue;
+
+          if (expr === '?') {
+            row[col] = params[paramIdx++] ?? null;
+          } else if (expr.toLowerCase() === 'null') {
+            row[col] = null;
+          } else if (!isNaN(Number(expr))) {
+            row[col] = Number(expr);
+          } else {
+            row[col] = expr.replace(/^['"]|['"]$/g, '');
           }
         }
-      }
-      return;
-    }
 
-    if (cleaned.includes('DELETE FROM clauses')) {
-      const id = params[0] as string;
-      this.tables.clauses = this.tables.clauses.filter((r) => r.id !== id);
-      return;
-    }
-
-    if (cleaned.includes('INSERT INTO parties')) {
-      this.tables.parties.push({
-        id: params[0] as string,
-        name: params[1] as string,
-        email: params[2] as string,
-        created_at: params[3] as string,
-        updated_at: params[4] as string,
-        last_seq: params[5] as number,
-      });
-      return;
-    }
-
-    if (cleaned.includes('UPDATE parties SET')) {
-      const id = params[params.length - 1] as string;
-      const idx = this.tables.parties.findIndex((r) => r.id === id);
-      if (idx !== -1) {
-        const current = this.tables.parties[idx];
-        if (current) {
-          if (cleaned.includes('name = ?')) {
-            current.name = params[0] as string;
-            current.email = params[1] as string;
-            current.updated_at = params[2] as string;
-            current.last_seq = params[3] as number;
-          } else if (cleaned.includes('last_seq = ?')) {
-            current.last_seq = params[0] as number;
-          }
+        const table = this.tables[tableName as keyof typeof this.tables];
+        if (!table) {
+          throw new Error(`Table '${tableName}' does not exist in InMemorySqliteAdapter`);
         }
+
+        if (cleaned.includes('OR IGNORE')) {
+          const exists = table.some((r) => r.id === row.id);
+          if (!exists) {
+            table.push(row);
+          }
+        } else {
+          table.push(row);
+        }
+        return;
       }
-      return;
     }
 
-    if (cleaned.includes('DELETE FROM parties')) {
-      const id = params[0] as string;
-      this.tables.parties = this.tables.parties.filter((r) => r.id !== id);
-      return;
-    }
-
-    if (cleaned.includes('INSERT INTO relationships')) {
-      this.tables.relationships.push({
-        id: params[0] as string,
-        source_id: params[1] as string,
-        source_type: params[2] as string,
-        target_id: params[3] as string,
-        target_type: params[4] as string,
-        type: params[5] as string,
-        created_at: params[6] as string,
-        updated_at: params[7] as string,
-        last_seq: params[8] as number,
-      });
-      return;
-    }
-
-    if (cleaned.includes('DELETE FROM relationships')) {
-      const id = params[0] as string;
-      this.tables.relationships = this.tables.relationships.filter((r) => r.id !== id);
-      return;
-    }
-
-    if (cleaned.includes('INSERT OR IGNORE INTO sync_ops')) {
-      this.tables.sync_ops.push({
-        id: params[0] as string,
-        kind: params[1] as string,
-        entity_type: params[2] as string,
-        entity_id: params[3] as string,
-        payload: params[4] as string,
-        client_timestamp: params[5] as string,
-        seq: params[6] === undefined ? null : (params[6] as number),
-      });
-      return;
-    }
-
-    if (cleaned.includes('UPDATE sync_ops SET seq = ? WHERE id = ?')) {
-      const seq = params[0] as number;
-      const id = params[1] as string;
-      const op = this.tables.sync_ops.find((r) => r.id === id);
-      if (op) {
-        op.seq = seq;
-      }
-      return;
-    }
+    throw new Error(`Unrecognized SQL exec query: ${sql}`);
   }
 
   async transaction<T>(fn: (tx: SqliteAdapter) => Promise<T>): Promise<T> {
