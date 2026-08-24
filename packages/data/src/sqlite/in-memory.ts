@@ -130,20 +130,21 @@ export class InMemorySqliteAdapter implements SqliteAdapter {
       return;
     }
 
-    if (cleaned.includes('UPDATE documents SET')) {
+    if (cleaned.startsWith('UPDATE documents SET')) {
+      const setPart = cleaned.substring('UPDATE documents SET'.length, cleaned.indexOf('WHERE')).trim();
       const id = params[params.length - 1] as string;
       const idx = this.tables.documents.findIndex((r) => r.id === id);
       if (idx !== -1) {
         const current = this.tables.documents[idx];
         if (current) {
-          if (cleaned.includes('title = ?')) {
-            current.title = params[0] as string;
-            current.content = params[1] as string;
-            current.updated_at = params[2] as string;
-            current.last_seq = params[3] as number;
-          } else if (cleaned.includes('last_seq = ?')) {
-            current.last_seq = params[0] as number;
-          }
+          const assignments = setPart.split(',').map((s) => s.trim().split('=')[0]?.trim() || '');
+          assignments.forEach((field, i) => {
+            if (field === 'title') current.title = params[i] as string;
+            else if (field === 'content') current.content = params[i] as string;
+            else if (field === 'created_at') current.created_at = params[i] as string;
+            else if (field === 'updated_at') current.updated_at = params[i] as string;
+            else if (field === 'last_seq') current.last_seq = params[i] as number;
+          });
         }
       }
       return;
@@ -168,20 +169,22 @@ export class InMemorySqliteAdapter implements SqliteAdapter {
       return;
     }
 
-    if (cleaned.includes('UPDATE clauses SET')) {
+    if (cleaned.startsWith('UPDATE clauses SET')) {
+      const setPart = cleaned.substring('UPDATE clauses SET'.length, cleaned.indexOf('WHERE')).trim();
       const id = params[params.length - 1] as string;
       const idx = this.tables.clauses.findIndex((r) => r.id === id);
       if (idx !== -1) {
         const current = this.tables.clauses[idx];
         if (current) {
-          if (cleaned.includes('title = ?')) {
-            current.title = params[0] as string;
-            current.text = params[1] as string;
-            current.updated_at = params[2] as string;
-            current.last_seq = params[3] as number;
-          } else if (cleaned.includes('last_seq = ?')) {
-            current.last_seq = params[0] as number;
-          }
+          const assignments = setPart.split(',').map((s) => s.trim().split('=')[0]?.trim() || '');
+          assignments.forEach((field, i) => {
+            if (field === 'title') current.title = params[i] as string;
+            else if (field === 'text') current.text = params[i] as string;
+            else if (field === 'document_id') current.document_id = params[i] as string;
+            else if (field === 'created_at') current.created_at = params[i] as string;
+            else if (field === 'updated_at') current.updated_at = params[i] as string;
+            else if (field === 'last_seq') current.last_seq = params[i] as number;
+          });
         }
       }
       return;
@@ -205,20 +208,21 @@ export class InMemorySqliteAdapter implements SqliteAdapter {
       return;
     }
 
-    if (cleaned.includes('UPDATE parties SET')) {
+    if (cleaned.startsWith('UPDATE parties SET')) {
+      const setPart = cleaned.substring('UPDATE parties SET'.length, cleaned.indexOf('WHERE')).trim();
       const id = params[params.length - 1] as string;
       const idx = this.tables.parties.findIndex((r) => r.id === id);
       if (idx !== -1) {
         const current = this.tables.parties[idx];
         if (current) {
-          if (cleaned.includes('name = ?')) {
-            current.name = params[0] as string;
-            current.email = params[1] as string;
-            current.updated_at = params[2] as string;
-            current.last_seq = params[3] as number;
-          } else if (cleaned.includes('last_seq = ?')) {
-            current.last_seq = params[0] as number;
-          }
+          const assignments = setPart.split(',').map((s) => s.trim().split('=')[0]?.trim() || '');
+          assignments.forEach((field, i) => {
+            if (field === 'name') current.name = params[i] as string;
+            else if (field === 'email') current.email = params[i] as string;
+            else if (field === 'created_at') current.created_at = params[i] as string;
+            else if (field === 'updated_at') current.updated_at = params[i] as string;
+            else if (field === 'last_seq') current.last_seq = params[i] as number;
+          });
         }
       }
       return;

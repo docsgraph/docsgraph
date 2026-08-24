@@ -3,8 +3,27 @@ import type { Document, Party, Clause, Relationship } from './types/models';
 import type { SyncOp, RemoteSyncOp, SyncOpKind } from './sync/types';
 import { pendingMigrations } from './schema/migrations';
 
+export interface Conflict {
+  id: string;
+  entityId: string;
+  entityType: 'document' | 'clause' | 'party';
+  fieldName: string;
+  localValue: string;
+  remoteValue: string;
+}
+
 export class LocalStore {
+  private activeConflicts: Conflict[] = [];
+
   constructor(private adapter: SqliteAdapter) {}
+
+  getActiveConflicts(): Conflict[] {
+    return this.activeConflicts;
+  }
+
+  clearConflicts(): void {
+    this.activeConflicts = [];
+  }
 
   /**
    * Run pending migrations to set up or update the SQLite schema.
@@ -547,6 +566,34 @@ export class LocalStore {
               if (!locallyModifiedFields.has(key)) {
                 updateKeys.push(`${this.camelToSnake(key)} = ?`);
                 updateValues.push(remotePayload[key] as SqlParam);
+              } else {
+                const entityRows = await tx.query(
+                  `SELECT * FROM ${tableName} WHERE id = ?`,
+                  [op.entityId]
+                );
+                const currentEntity = entityRows[0];
+                const snakeKey = this.camelToSnake(key);
+                const localVal = currentEntity ? currentEntity[snakeKey] : undefined;
+                const remoteVal = remotePayload[key];
+                if (localVal !== undefined && localVal !== remoteVal) {
+                  const isDup = this.activeConflicts.some(
+                    (c) =>
+                      c.entityId === op.entityId &&
+                      c.entityType === op.entityType &&
+                      c.fieldName === key &&
+                      c.remoteValue === String(remoteVal)
+                  );
+                  if (!isDup) {
+                    this.activeConflicts.push({
+                      id: `conflict-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                      entityId: op.entityId,
+                      entityType: op.entityType as any,
+                      fieldName: key,
+                      localValue: String(localVal),
+                      remoteValue: String(remoteVal),
+                    });
+                  }
+                }
               }
             }
 
