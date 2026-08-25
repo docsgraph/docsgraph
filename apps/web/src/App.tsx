@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { GraphView } from '@docsgraph/graph-view';
 import type { GraphEdge, GraphNode } from '@docsgraph/graph-view';
-import { Button } from '@docsgraph/ui';
+import { Button, DocumentListItem } from '@docsgraph/ui';
 import { LocalStore, InMemorySqliteAdapter, SyncManager, HttpSyncClient } from '@docsgraph/data';
 import type { Party, Clause, Relationship, Conflict, SyncStatus } from '@docsgraph/data';
 import { search } from '@docsgraph/search';
@@ -202,15 +202,17 @@ export function App() {
       await store.updateDocument(currentConflict.entityId, {
         [currentConflict.fieldName]: currentConflict.remoteValue,
       });
-      await loadData();
     }
 
-    store.clearConflicts();
-    setActiveConflicts([]);
-    setShowConflictModal(false);
-    setSyncStatus('syncing');
+    store.resolveConflict(currentConflict.id);
+    const remainingConflicts = store.getActiveConflicts();
+    setActiveConflicts(remainingConflicts);
 
-    await syncManager.sync();
+    if (remainingConflicts.length === 0) {
+      setShowConflictModal(false);
+      setSyncStatus('syncing');
+      await syncManager.sync();
+    }
     await loadData();
   };
 
@@ -440,10 +442,13 @@ export function App() {
           nextStatuses[doc.id] = 'pending';
         } else if (docClauses.length > 0) {
           nextStatuses[doc.id] = 'completed';
-        } else if (doc.id === 'doc-2') {
-          nextStatuses[doc.id] = 'pending';
-        } else {
+        } else if (prev[doc.id] === 'failed') {
+          // Preserve an explicit prior failure (e.g. from a retry that errored)
+          // rather than assuming failure for a document that just hasn't been
+          // analyzed yet.
           nextStatuses[doc.id] = 'failed';
+        } else {
+          nextStatuses[doc.id] = 'pending';
         }
       });
       return nextStatuses;
@@ -1060,14 +1065,12 @@ export function App() {
                     Available Documents
                   </h4>
                   {documents.map((doc) => (
-                    <button
+                    <DocumentListItem
                       key={doc.id}
+                      id={doc.id}
+                      title={doc.title}
                       onClick={() => setSelectedDocId(doc.id)}
-                      className="w-full text-left px-3 py-2 bg-slate-800/40 border border-slate-700/60 hover:bg-slate-800/80 rounded-lg text-sm text-slate-300 flex justify-between items-center transition-all"
-                    >
-                      <span>{doc.title}</span>
-                      <span className="text-xs text-slate-500 font-mono">Open →</span>
-                    </button>
+                    />
                   ))}
                 </div>
               </div>
@@ -1162,3 +1165,5 @@ export function App() {
     </main>
   );
 }
+
+

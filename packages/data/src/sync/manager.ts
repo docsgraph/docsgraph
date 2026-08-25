@@ -113,7 +113,11 @@ export class SyncManager {
         const unsyncedOps = await this.store.getUnsyncedOps();
         if (unsyncedOps.length > 0) {
           const cursor = await this.store.getSyncCursor();
-          await this.client.push(unsyncedOps, cursor);
+          const pushResult = await this.client.push(unsyncedOps, cursor);
+          for (const ack of pushResult.acks) {
+            await this.store.applyAck(ack.opId, ack.seq);
+          }
+          await this.store.setSyncCursor(pushResult.cursor);
         }
 
         // 2. Pull phase: pull remote changes since local cursor

@@ -40,12 +40,17 @@ export interface RemoteSyncOp extends SyncOp {
 /** Opaque cursor marking "last sequence number this client has seen". */
 export type SyncCursor = number;
 
+export interface SyncPushAck {
+  opId: string;
+  seq: number;
+}
+
 /** Result of a successful push. */
 export interface PushResult {
   /** The highest sequence number assigned to ops in this push. */
   cursor: SyncCursor;
-  /** Number of ops the server accepted. */
-  accepted: number;
+  /** Individual acknowledgements for each pushed op. */
+  acks: SyncPushAck[];
 }
 
 /** Result of a successful pull. */
