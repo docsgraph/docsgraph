@@ -148,7 +148,6 @@ export class InMemorySqliteAdapter implements SqliteAdapter {
         const tableName = updateMatch[1].toLowerCase();
         const assignmentsStr = updateMatch[2];
         const id = params[params.length - 1] as string;
-
         const table = this.tables[tableName as keyof typeof this.tables];
         if (!table) {
           throw new Error(`Table '${tableName}' does not exist in InMemorySqliteAdapter`);

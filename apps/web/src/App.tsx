@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { GraphView } from '@docsgraph/graph-view';
 import type { GraphEdge, GraphNode } from '@docsgraph/graph-view';
 import { Button, DocumentListItem } from '@docsgraph/ui';
-import { LocalStore, InMemorySqliteAdapter } from '@docsgraph/data';
-import type { Party, Clause, Relationship } from '@docsgraph/data';
+import { LocalStore, InMemorySqliteAdapter, SyncManager, HttpSyncClient } from '@docsgraph/data';
+import type { Party, Clause, Relationship, Conflict, SyncStatus } from '@docsgraph/data';
 import { search } from '@docsgraph/search';
 import type { EvidenceSnippet } from '@docsgraph/search';
 
@@ -30,6 +30,21 @@ const SEED_DOCS = [
 const adapter = new InMemorySqliteAdapter();
 const store = new LocalStore(adapter);
 
+let syncStatusListener: ((status: SyncStatus) => void) | null = null;
+
+const syncClient = new HttpSyncClient({
+  baseUrl: 'http://localhost:8000',
+});
+const syncManager = new SyncManager({
+  store,
+  client: syncClient,
+  onStatusChange: (status) => {
+    if (syncStatusListener) {
+      syncStatusListener(status);
+    }
+  },
+});
+
 export function App() {
   const [dbInitialized, setDbInitialized] = useState(false);
   const [documents, setDocuments] = useState<Array<{ id: string; title: string; content: string }>>([]);
@@ -52,113 +67,153 @@ export function App() {
   // State for document title editing and offline edit tracking
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingTitleText, setEditingTitleText] = useState('');
-  const [offlineEditMade, setOfflineEditMade] = useState(false);
 
   // Network and Sync States
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'conflict' | 'offline'>('synced');
-  const [activeConflicts, setActiveConflicts] = useState<Array<{
-    id: string;
-    entityId: string;
-    entityType: 'document' | 'clause' | 'party';
-    fieldName: string;
-    localValue: string;
-    remoteValue: string;
-  }>>([]);
+  const [activeConflicts, setActiveConflicts] = useState<Conflict[]>([]);
   const [showConflictModal, setShowConflictModal] = useState(false);
 
   // Derived state to avoid undefined indexing warnings
   const currentConflict = activeConflicts[0];
 
-  // Real offline state sync with navigator
+  const isOnlineRef = useRef(isOnline);
   useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
+
+  // Intercept window.fetch to simulate offline behavior and direct sync calls to backend
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!isOnlineRef.current) {
+        throw new TypeError('Failed to fetch');
+      }
+      return originalFetch(input, init);
+    };
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
+
+  // Synchronize syncStatus with SyncManager
+  useEffect(() => {
+    syncStatusListener = (status) => {
+      if (status === 'offline') {
+        setSyncStatus('offline');
+      } else if (status === 'syncing') {
+        setSyncStatus('syncing');
+      } else if (status === 'error') {
+        setSyncStatus('offline');
+      } else if (status === 'idle') {
+        const storeConflicts = store.getActiveConflicts();
+        if (storeConflicts.length > 0) {
+          setActiveConflicts(storeConflicts);
+          setSyncStatus('conflict');
+          setShowConflictModal(true);
+        } else {
+          setSyncStatus('synced');
+        }
+      }
+    };
+
     const handleOnlineStatus = () => {
       setIsOnline(navigator.onLine);
-      if (navigator.onLine) {
-        setSyncStatus('syncing');
-        setTimeout(() => setSyncStatus('synced'), 1500);
-      } else {
-        setSyncStatus('offline');
-      }
     };
     window.addEventListener('online', handleOnlineStatus);
     window.addEventListener('offline', handleOnlineStatus);
-    if (!navigator.onLine) {
-      setSyncStatus('offline');
-    }
+
+    const currentStatus = syncManager.getStatus();
+    syncStatusListener(currentStatus);
+
     return () => {
+      syncStatusListener = null;
       window.removeEventListener('online', handleOnlineStatus);
       window.removeEventListener('offline', handleOnlineStatus);
     };
   }, []);
 
-  // Network toggler simulation
-  const handleToggleNetwork = () => {
+  // Network toggler using actual SyncManager and pre-push conflict detection
+  const handleToggleNetwork = async () => {
     if (isOnline) {
       setIsOnline(false);
       setSyncStatus('offline');
     } else {
       setIsOnline(true);
       setSyncStatus('syncing');
-      setTimeout(() => {
-        if (offlineEditMade && selectedDocId) {
-          const doc = documents.find((d) => d.id === selectedDocId);
-          if (doc) {
-            setSyncStatus('conflict');
-            setActiveConflicts([
-              {
-                id: 'conflict-1',
-                entityId: selectedDocId,
-                entityType: 'document',
-                fieldName: 'title',
-                localValue: doc.title,
-                remoteValue: doc.title + ' (Server Version Conflict)',
-              },
-            ]);
-            setShowConflictModal(true);
-          } else {
-            setSyncStatus('synced');
-          }
-        } else {
-          setSyncStatus('synced');
+
+      try {
+        const currentCursor = await store.getSyncCursor();
+        const pullResult = await syncClient.pull(currentCursor);
+        if (pullResult.ops.length > 0) {
+          await store.applyRemoteOps(pullResult.ops);
         }
-      }, 1500);
+        await store.setSyncCursor(pullResult.cursor);
+      } catch (err) {
+        console.warn('Pre-sync pull failed or skipped:', err);
+      }
+
+      const storeConflicts = store.getActiveConflicts();
+      if (storeConflicts.length > 0) {
+        setActiveConflicts(storeConflicts);
+        setSyncStatus('conflict');
+        setShowConflictModal(true);
+      } else {
+        await syncManager.sync();
+        await loadData();
+      }
     }
   };
 
-  // Trigger Mock Sync Conflict button
-  const handleTriggerMockConflict = () => {
+  // Trigger Mock Sync Conflict by applying a simulated remote divergent operation
+  const handleTriggerMockConflict = async () => {
     if (!selectedDocId) return;
     const doc = documents.find((d) => d.id === selectedDocId);
-    if (doc) {
+    if (!doc) return;
+
+    // Ensure we have an offline edit for this document to trigger the LWW conflict path
+    await store.updateDocument(doc.id, { title: doc.title });
+
+    const conflictOp = {
+      id: `mock-conflict-op-${Date.now()}`,
+      kind: 'update' as const,
+      entityType: 'document',
+      entityId: doc.id,
+      payload: { title: `${doc.title} (Remote Divergent Edit)` },
+      clientTimestamp: new Date().toISOString(),
+      sequence: 999,
+    };
+
+    await store.applyRemoteOps([conflictOp]);
+
+    const storeConflicts = store.getActiveConflicts();
+    if (storeConflicts.length > 0) {
+      setActiveConflicts(storeConflicts);
       setSyncStatus('conflict');
-      setActiveConflicts([
-        {
-          id: 'conflict-1',
-          entityId: selectedDocId,
-          entityType: 'document',
-          fieldName: 'title',
-          localValue: doc.title,
-          remoteValue: doc.title + ' (Remote Divergent Edit)',
-        },
-      ]);
       setShowConflictModal(true);
     }
   };
 
-  // Resolve sync conflict per documented policy (No data loss)
+  // Resolve sync conflict per LWW policy and resume sync
   const handleResolveConflict = async (resolution: 'local' | 'remote') => {
     if (!currentConflict) return;
 
     if (resolution === 'remote') {
-      await store.updateDocument(currentConflict.entityId, { title: currentConflict.remoteValue });
-      await loadData();
+      await store.updateDocument(currentConflict.entityId, {
+        [currentConflict.fieldName]: currentConflict.remoteValue,
+      });
     }
 
-    setActiveConflicts([]);
-    setShowConflictModal(false);
-    setSyncStatus('synced');
-    setOfflineEditMade(false);
+    store.resolveConflict(currentConflict.id);
+    const remainingConflicts = store.getActiveConflicts();
+    setActiveConflicts(remainingConflicts);
+
+    if (remainingConflicts.length === 0) {
+      setShowConflictModal(false);
+      setSyncStatus('syncing');
+      await syncManager.sync();
+    }
+    await loadData();
   };
 
   // Save document title updates and track offline changes
@@ -167,9 +222,6 @@ export function App() {
     await store.updateDocument(selectedDocId, { title: editingTitleText });
     await loadData();
     setIsEditingTitle(false);
-    if (!isOnline) {
-      setOfflineEditMade(true);
-    }
   };
 
   // Automatically clear graph highlight when opening or switching documents
@@ -362,6 +414,7 @@ export function App() {
       }
 
       await loadData();
+      await syncManager.sync();
       setDocStatuses((prev) => ({ ...prev, [docId]: 'completed' }));
     } catch (err) {
       console.error('Analysis failed:', err);
@@ -635,7 +688,7 @@ export function App() {
             className={`px-3 py-1 text-xs font-semibold rounded-full border transition flex items-center gap-1.5 ${
               isOnline
                 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
             }`}
             title="Click to toggle simulated connection state"
           >
@@ -656,7 +709,7 @@ export function App() {
             </span>
           )}
           {syncStatus === 'offline' && (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-slate-805/10 bg-slate-800 text-slate-400 border border-slate-700">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-slate-800/10 bg-slate-800 text-slate-400 border border-slate-700">
               Offline Mode
             </span>
           )}
@@ -792,7 +845,7 @@ export function App() {
                         </button>
                         <button
                           onClick={() => setIsEditingTitle(false)}
-                          className="bg-slate-805 bg-slate-800 hover:bg-slate-750 text-xs font-semibold px-2 py-1 rounded text-slate-300"
+                          className="bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-2 py-1 rounded text-slate-300"
                         >
                           Cancel
                         </button>
@@ -1040,7 +1093,7 @@ export function App() {
               </div>
             </div>
 
-            <p className="text-xs text-slate-405 text-slate-400">
+            <p className="text-xs text-slate-400">
               The field <code className="text-amber-400 font-mono">{currentConflict.fieldName}</code> was modified locally while offline, but diverging updates were also found on the server.
             </p>
 
